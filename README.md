@@ -113,6 +113,7 @@ Installing the [unitree_mujoco](https://github.com/unitreerobotics/unitree_mujoc
 
 For a complete `G1-29dof` keyboard-based Sim2Sim runbook, see [doc/g1_sim2sim_keyboard.md](doc/g1_sim2sim_keyboard.md).
 中文说明见 [doc/g1_sim2sim_keyboard_zh.md](doc/g1_sim2sim_keyboard_zh.md).
+`R1` tracking 策略键盘版中文说明见 [doc/r1_sim2sim_keyboard_zh.md](doc/r1_sim2sim_keyboard_zh.md).
 
 - Set the `robot` at `/simulate/config.yaml` to g1
 - Set `domain_id` to 0
