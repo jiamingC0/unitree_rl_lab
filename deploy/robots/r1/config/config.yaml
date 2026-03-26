@@ -1,0 +1,78 @@
+controller:
+  mode_pr: 0
+  mode_machine: 0
+
+FSM:
+  _:
+    Passive:
+      id: 1
+    FixStand:
+      id: 2
+    Track:
+      id: 3
+      type: Track
+
+  Passive:
+    transitions:
+      FixStand: LT + up.on_pressed
+    mode: [
+      1,1,1,1,1,1,
+      1,1,1,1,1,1,
+      1,1,
+      1,1,1,1,1,
+      1,1,1,1,1,
+      1,1,
+      0,0,0,0,0,0,0
+    ]
+    kd: [
+      3,3,3,3,3,3,
+      3,3,3,3,3,3,
+      3,3,
+      2,2,2,2,2,
+      2,2,2,2,2,
+      1,1,
+      0,0,0,0,0,0,0
+    ]
+
+  FixStand:
+    transitions:
+      Passive: LT + B.on_pressed
+      Track: RB + X.on_pressed
+    kp: [
+      200,200,200,200,200,200,
+      200,200,200,200,200,200,
+      300,300,
+      100,100,100,100,50,
+      100,100,100,100,50,
+      50,10,
+      0,0,0,0,0,0,0
+    ]
+    kd: [
+      3,3,3,3,3,3,
+      3,3,3,3,3,3,
+      5,5,
+      2,2,2,2,2,
+      2,2,2,2,2,
+      2,0.1,
+      0,0,0,0,0,0,0
+    ]
+    ts: [0, 3]
+    qs: [
+      [],
+      [
+        0, 0, 0, 0.3, -0.2, 0,
+        0, 0, 0, 0.3, -0.2, 0,
+        0, 0,
+        0.2, 0, 0, 0.32, 0,
+        0.2, 0, 0, 0.32, 0,
+        0, 0,
+        0,0,0,0,0,0,0
+      ]
+    ]
+
+  Track:
+    transitions:
+      Passive: LT + B.on_pressed
+    policy_dir: config/policy/track
+    motion_file: config/policy/track/params/reference.npz
+    fps: 50
