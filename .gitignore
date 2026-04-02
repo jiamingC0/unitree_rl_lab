@@ -73,3 +73,9 @@ datasets
 
 # Mimic
 *.npz
+
+#debug
+tmp/*
+deploy/robots/r1/log/*
+
+.codex
