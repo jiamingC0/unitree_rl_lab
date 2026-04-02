@@ -349,7 +349,6 @@ State_Track::State_Track(int state_mode, std::string state_string)
     );
     policy_kp_ = env->cfg["policy_kp"].as<std::vector<float>>();
     policy_kd_ = env->cfg["policy_kd"].as<std::vector<float>>();
-    torque_limit_ = env->cfg["torque_limit"].as<std::vector<float>>();
     spdlog::info("Track: deploy config loaded, constructing ONNX session '{}'", policy_path.string());
     env->alg = std::make_unique<isaaclab::OrtRunner>(policy_path.string());
     spdlog::info("Track: ONNX session created successfully");
@@ -370,14 +369,12 @@ State_Track::State_Track(int state_mode, std::string state_string)
 void State_Track::enter()
 {
     spdlog::info("Track: enter");
-    // Match training-time semantics: the policy outputs target joint angles,
-    // while torques are computed locally from current q/dq and then clipped.
     for (int i = 0; i < lowcmd->msg_.motor_cmd().size(); ++i)
     {
         lowcmd->msg_.motor_cmd()[i].kp() = 0.0f;
         lowcmd->msg_.motor_cmd()[i].kd() = 0.0f;
-        lowcmd->msg_.motor_cmd()[i].dq() = 0;
-        lowcmd->msg_.motor_cmd()[i].tau() = 0;
+        lowcmd->msg_.motor_cmd()[i].dq() = 0.0f;
+        lowcmd->msg_.motor_cmd()[i].tau() = 0.0f;
     }
 
     reference = reference_;
@@ -385,50 +382,29 @@ void State_Track::enter()
     spdlog::info("Track: reference reset with default joint pose of size {}", env->robot->data.default_joint_pos.size());
     env->reset();
     spdlog::info("Track: environment reset complete");
-
-    policy_thread_running = true;
-    policy_thread = std::thread([this]{
-        using clock = std::chrono::high_resolution_clock;
-        const std::chrono::duration<double> desired_duration(env->step_dt);
-        const auto dt = std::chrono::duration_cast<clock::duration>(desired_duration);
-        auto sleep_till = clock::now() + dt;
-
-        while (policy_thread_running)
-        {
-            env->robot->update();
-            reference_->update(env->episode_length * env->step_dt);
-            env->step();
-
-            std::this_thread::sleep_until(sleep_till);
-            sleep_till += dt;
-        }
-    });
 }
 
 void State_Track::run()
 {
+    // One Track::run() call is one full 50Hz high-level cycle.
+    env->robot->update();
+    reference_->update(env->episode_length * env->step_dt);
+    env->step();
+
     auto target_q = env->action_manager->processed_actions();
-    std::lock_guard<std::mutex> lock(lowstate->mutex_);
     for (int i = 0; i < env->robot->data.joint_ids_map.size(); ++i) {
         const int sdk_slot = env->robot->data.policy_joint_to_sdk_slot(i);
-        const float q = lowstate->msg_.motor_state()[sdk_slot].q();
-        const float dq = lowstate->msg_.motor_state()[sdk_slot].dq();
-        const float tau = std::clamp(
-            policy_kp_[i] * (target_q[i] - q) + policy_kd_[i] * (-dq),
-            -torque_limit_[i],
-            torque_limit_[i]
-        );
 
         auto & motor = lowcmd->msg_.motor_cmd()[sdk_slot];
         motor.q() = target_q[i];
-        motor.tau() = tau;
+        motor.dq() = 0.0f;
+        motor.kp() = policy_kp_[i];
+        motor.kd() = policy_kd_[i];
+        motor.tau() = 0.0f;
     }
 }
 
 void State_Track::exit()
 {
-    policy_thread_running = false;
-    if (policy_thread.joinable()) {
-        policy_thread.join();
-    }
+    spdlog::info("Track: exit");
 }

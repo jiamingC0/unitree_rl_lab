@@ -66,6 +66,7 @@ public:
 
     State_Track(int state_mode, std::string state_string = "Track");
 
+    double run_dt() const override { return 0.02; }
     void enter();
     void run();
     void exit();
@@ -77,10 +78,6 @@ private:
     std::shared_ptr<ReferenceLoader> reference_;
     std::vector<float> policy_kp_;
     std::vector<float> policy_kd_;
-    std::vector<float> torque_limit_;
-
-    std::thread policy_thread;
-    bool policy_thread_running = false;
 };
 
 REGISTER_FSM(State_Track)
