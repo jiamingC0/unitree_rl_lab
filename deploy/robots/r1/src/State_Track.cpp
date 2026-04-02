@@ -23,6 +23,18 @@ enum class CacheDType : uint32_t
     Int64 = 5,
     UInt8 = 6,
 };
+
+float quat_to_yaw(float qw, float qx, float qy, float qz)
+{
+    const float norm = std::sqrt(qw * qw + qx * qx + qy * qy + qz * qz);
+    if (norm > 1e-8f) {
+        qw /= norm;
+        qx /= norm;
+        qy /= norm;
+        qz /= norm;
+    }
+    return std::atan2(2.0f * (qw * qz + qx * qy), 1.0f - 2.0f * (qy * qy + qz * qz));
+}
 }
 
 namespace isaaclab
@@ -102,10 +114,13 @@ void State_Track::ReferenceLoader::reset(const Eigen::VectorXf& default_joint_po
 {
     default_joint_pos_ = default_joint_pos;
     joint_pos_rel_ = Eigen::VectorXf::Zero(kJointDim);
-    update(0.0f);
+    update(0.0f, false, Eigen::Vector2f::Zero(), 0.0f);
 }
 
-void State_Track::ReferenceLoader::update(float time_s)
+void State_Track::ReferenceLoader::update(float time_s,
+                                          bool has_current_root_xy,
+                                          const Eigen::Vector2f& current_root_xy,
+                                          float current_root_yaw)
 {
     if (frame_count_ == 0) {
         return;
@@ -132,22 +147,34 @@ void State_Track::ReferenceLoader::update(float time_s)
     }
 
     // Keep command semantics unchanged with old cache: absolute yaw/xy from reference root pose.
-    float qw = qpos_seq_[qpos_offset + 3];
-    float qx = qpos_seq_[qpos_offset + 4];
-    float qy = qpos_seq_[qpos_offset + 5];
-    float qz = qpos_seq_[qpos_offset + 6];
-    const float norm = std::sqrt(qw * qw + qx * qx + qy * qy + qz * qz);
-    if (norm > 1e-8f) {
-        qw /= norm;
-        qx /= norm;
-        qy /= norm;
-        qz /= norm;
-    }
-    const float yaw = std::atan2(2.0f * (qw * qz + qx * qy), 1.0f - 2.0f * (qy * qy + qz * qz));
-    yaw_cmd_[0] = std::cos(yaw);
-    yaw_cmd_[1] = std::sin(yaw);
-    xy_cmd_[0] = qpos_seq_[qpos_offset + 0];
-    xy_cmd_[1] = qpos_seq_[qpos_offset + 1];
+    const float yaw_ref = quat_to_yaw(
+        qpos_seq_[qpos_offset + 3],
+        qpos_seq_[qpos_offset + 4],
+        qpos_seq_[qpos_offset + 5],
+        qpos_seq_[qpos_offset + 6]
+    );
+    const float yaw_cmd_raw = 0.0f;
+    const float yaw_target = yaw_ref + yaw_cmd_raw;
+    const float yaw_d = wrap_to_pi(yaw_target - current_root_yaw);
+    yaw_cmd_[0] = std::cos(yaw_d);
+    yaw_cmd_[1] = std::sin(yaw_d);
+
+    const Eigen::Vector2f xy_ref(
+        qpos_seq_[qpos_offset + 0],
+        qpos_seq_[qpos_offset + 1]
+    );
+    const Eigen::Vector2f xy_cmd_raw = Eigen::Vector2f::Zero();
+    const float c_cmd = std::cos(yaw_cmd_raw);
+    const float s_cmd = std::sin(yaw_cmd_raw);
+    const Eigen::Matrix2f R_cmd = (Eigen::Matrix2f() << c_cmd, -s_cmd, s_cmd, c_cmd).finished();
+    const Eigen::Vector2f xy_target = R_cmd * (xy_cmd_raw + xy_ref);
+    Eigen::Vector2f xy_d = has_current_root_xy ? (xy_target - current_root_xy) : xy_target;
+
+    const float c_curr = std::cos(-current_root_yaw);
+    const float s_curr = std::sin(-current_root_yaw);
+    const Eigen::Matrix2f R_curr = (Eigen::Matrix2f() << c_curr, -s_curr, s_curr, c_curr).finished();
+    xy_d = R_curr * xy_d;
+    xy_cmd_ = xy_d;
 }
 
 std::filesystem::path State_Track::ReferenceLoader::ensure_cache_file(const std::filesystem::path& motion_file) const
@@ -345,7 +372,8 @@ State_Track::State_Track(int state_mode, std::string state_string)
     spdlog::info("Track: loading deploy config '{}'", (policy_dir / "params" / "deploy.yaml").string());
     env = std::make_unique<isaaclab::ManagerBasedRLEnv>(
         YAML::LoadFile(policy_dir / "params" / "deploy.yaml"),
-        std::make_shared<unitree::BaseArticulation<LowState_t::SharedPtr>>(FSMState::lowstate)
+        std::make_shared<unitree::BaseArticulation<LowState_t::SharedPtr, HighState_t::SharedPtr>>(
+            FSMState::lowstate, FSMState::highstate)
     );
     policy_kp_ = env->cfg["policy_kp"].as<std::vector<float>>();
     policy_kd_ = env->cfg["policy_kd"].as<std::vector<float>>();
@@ -388,7 +416,22 @@ void State_Track::run()
 {
     // One Track::run() call is one full 50Hz high-level cycle.
     env->robot->update();
-    reference_->update(env->episode_length * env->step_dt);
+    const auto& live_state = env->robot->data.live_state;
+    const float current_root_yaw = quat_to_yaw(
+        live_state.root_quat_w.w(),
+        live_state.root_quat_w.x(),
+        live_state.root_quat_w.y(),
+        live_state.root_quat_w.z()
+    );
+    const bool has_current_root_xy = live_state.has_highstate;
+    Eigen::Vector2f current_root_xy = Eigen::Vector2f::Zero();
+    if (has_current_root_xy) {
+        current_root_xy = live_state.root_pos_w.head<2>();
+    }
+    reference_->update(env->episode_length * env->step_dt,
+                       has_current_root_xy,
+                       current_root_xy,
+                       current_root_yaw);
     env->step();
 
     auto target_q = env->action_manager->processed_actions();

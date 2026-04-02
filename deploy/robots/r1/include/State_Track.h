@@ -31,7 +31,10 @@ public:
         ReferenceLoader(const std::filesystem::path& motion_file, float fps);
 
         void reset(const Eigen::VectorXf& default_joint_pos);
-        void update(float time_s);
+        void update(float time_s,
+                    bool has_current_root_xy,
+                    const Eigen::Vector2f& current_root_xy,
+                    float current_root_yaw);
 
         const Eigen::VectorXf& joint_pos_rel() const { return joint_pos_rel_; }
         float root_height() const { return root_height_; }

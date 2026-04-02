@@ -13,6 +13,18 @@ class MotionLoader;
 
 struct ArticulationData
 {
+    struct LiveState
+    {
+        bool has_lowstate = false;
+        bool has_highstate = false;
+        Eigen::Vector3f root_pos_w = Eigen::Vector3f::Zero();
+        Eigen::Vector3f root_lin_vel_w = Eigen::Vector3f::Zero();
+        Eigen::Quaternionf root_quat_w = Eigen::Quaternionf::Identity();
+        Eigen::Vector3f root_gyro_b = Eigen::Vector3f::Zero();
+        Eigen::VectorXf qpos;
+        Eigen::VectorXf qvel;
+    };
+
     Eigen::Vector3f GRAVITY_VEC_W = Eigen::Vector3f(0.0f, 0.0f, -1.0f);
     Eigen::Vector3f FORWARD_VEC_B = Eigen::Vector3f(1.0f, 0.0f, 0.0f);
 
@@ -49,6 +61,7 @@ struct ArticulationData
     }
 
     unitree::common::UnitreeJoystick* joystick = nullptr;
+    LiveState live_state;
 };
 
 class Articulation
