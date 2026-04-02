@@ -77,3 +77,4 @@ FSM:
     policy_file: 20260327_062134-total+Dance1_convert.onnx
     motion_file: config/policy/track/params/z_005.npz
     fps: 50
+    no_global_mode: false

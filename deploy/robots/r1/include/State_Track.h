@@ -32,6 +32,7 @@ public:
 
         void reset(const Eigen::VectorXf& default_joint_pos);
         void update(float time_s,
+                    bool no_global_mode,
                     bool has_current_root_xy,
                     const Eigen::Vector2f& current_root_xy,
                     float current_root_yaw);
@@ -81,6 +82,9 @@ private:
     std::shared_ptr<ReferenceLoader> reference_;
     std::vector<float> policy_kp_;
     std::vector<float> policy_kd_;
+    bool no_global_mode_ = false;
+    bool has_initial_yaw_bias_ = false;
+    float initial_yaw_bias_ = 0.0f;
 };
 
 REGISTER_FSM(State_Track)

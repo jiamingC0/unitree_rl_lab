@@ -114,10 +114,11 @@ void State_Track::ReferenceLoader::reset(const Eigen::VectorXf& default_joint_po
 {
     default_joint_pos_ = default_joint_pos;
     joint_pos_rel_ = Eigen::VectorXf::Zero(kJointDim);
-    update(0.0f, false, Eigen::Vector2f::Zero(), 0.0f);
+    update(0.0f, false, false, Eigen::Vector2f::Zero(), 0.0f);
 }
 
 void State_Track::ReferenceLoader::update(float time_s,
+                                          bool no_global_mode,
                                           bool has_current_root_xy,
                                           const Eigen::Vector2f& current_root_xy,
                                           float current_root_yaw)
@@ -160,6 +161,13 @@ void State_Track::ReferenceLoader::update(float time_s,
     yaw_cmd_[0] = std::cos(yaw_d);
     yaw_cmd_[1] = std::sin(yaw_d);
 
+    // No-global mode for real robot deployment:
+    // keep yaw command from IMU yaw, but disable XY global-position command.
+    if (no_global_mode || !has_current_root_xy) {
+        xy_cmd_.setZero();
+        return;
+    }
+
     const Eigen::Vector2f xy_ref(
         qpos_seq_[qpos_offset + 0],
         qpos_seq_[qpos_offset + 1]
@@ -169,7 +177,7 @@ void State_Track::ReferenceLoader::update(float time_s,
     const float s_cmd = std::sin(yaw_cmd_raw);
     const Eigen::Matrix2f R_cmd = (Eigen::Matrix2f() << c_cmd, -s_cmd, s_cmd, c_cmd).finished();
     const Eigen::Vector2f xy_target = R_cmd * (xy_cmd_raw + xy_ref);
-    Eigen::Vector2f xy_d = has_current_root_xy ? (xy_target - current_root_xy) : xy_target;
+    Eigen::Vector2f xy_d = xy_target - current_root_xy;
 
     const float c_curr = std::cos(-current_root_yaw);
     const float s_curr = std::sin(-current_root_yaw);
@@ -358,6 +366,8 @@ State_Track::State_Track(int state_mode, std::string state_string)
     spdlog::info("Track: constructing state '{}'", state_string);
     auto cfg = param::config["FSM"][state_string];
     auto policy_dir = param::parser_policy_dir(cfg["policy_dir"].as<std::string>());
+    no_global_mode_ = cfg["no_global_mode"].as<bool>(false);
+    spdlog::info("Track: no_global_mode = {}", no_global_mode_ ? "true" : "false");
     const std::string policy_file = cfg["policy_file"] ? cfg["policy_file"].as<std::string>() : "policy.onnx";
     const auto policy_path = policy_dir / "exported" / policy_file;
 
@@ -394,6 +404,8 @@ State_Track::State_Track(int state_mode, std::string state_string)
 void State_Track::enter()
 {
     spdlog::info("Track: enter");
+    has_initial_yaw_bias_ = false;
+    initial_yaw_bias_ = 0.0f;
     for (int i = 0; i < lowcmd->msg_.motor_cmd().size(); ++i)
     {
         lowcmd->msg_.motor_cmd()[i].kp() = 0.0f;
@@ -407,6 +419,19 @@ void State_Track::enter()
     spdlog::info("Track: reference reset with default joint pose of size {}", env->robot->data.default_joint_pos.size());
     env->reset();
     spdlog::info("Track: environment reset complete");
+
+    if (no_global_mode_) {
+        env->robot->update();
+        const auto& live_state = env->robot->data.live_state;
+        initial_yaw_bias_ = quat_to_yaw(
+            live_state.root_quat_w.w(),
+            live_state.root_quat_w.x(),
+            live_state.root_quat_w.y(),
+            live_state.root_quat_w.z()
+        );
+        has_initial_yaw_bias_ = true;
+        spdlog::info("Track: no_global_mode yaw-zero bias initialized: {:.6f} rad", initial_yaw_bias_);
+    }
 }
 
 void State_Track::run()
@@ -420,15 +445,27 @@ void State_Track::run()
         live_state.root_quat_w.y(),
         live_state.root_quat_w.z()
     );
-    const bool has_current_root_xy = live_state.has_highstate;
+    float current_root_yaw_used = current_root_yaw;
+    if (no_global_mode_) {
+        if (!has_initial_yaw_bias_) {
+            initial_yaw_bias_ = current_root_yaw;
+            has_initial_yaw_bias_ = true;
+        }
+        current_root_yaw_used = std::atan2(
+            std::sin(current_root_yaw - initial_yaw_bias_),
+            std::cos(current_root_yaw - initial_yaw_bias_)
+        );
+    }
+    const bool has_current_root_xy = (!no_global_mode_) && live_state.has_highstate;
     Eigen::Vector2f current_root_xy = Eigen::Vector2f::Zero();
     if (has_current_root_xy) {
         current_root_xy = live_state.root_pos_w.head<2>();
     }
     reference_->update(env->episode_length * env->step_dt,
+                       no_global_mode_,
                        has_current_root_xy,
                        current_root_xy,
-                       current_root_yaw);
+                       current_root_yaw_used);
     env->step();
 
     auto target_q = env->action_manager->processed_actions();
