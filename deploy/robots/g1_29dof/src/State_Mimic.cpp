@@ -144,18 +144,16 @@ State_Mimic::State_Mimic(int state_mode, std::string state_string)
     env->alg = std::make_unique<isaaclab::OrtRunner>(policy_dir / "exported" / "policy.onnx");
 
     const auto & joy = FSMState::lowstate->joystick;
-    this->registered_checks.emplace_back(
-        std::make_pair(
-            [&]()->bool{ return (env->episode_length * env->step_dt) > time_range_[1]; }, // time out
-            FSMStringMap.right.at("Velocity")
-        )
-    );
-    this->registered_checks.emplace_back(
-        std::make_pair(
-            [&]()->bool{ return isaaclab::mdp::bad_orientation(env.get(), 1.0); }, // bad orientation
-            FSMStringMap.right.at("Passive")
-        )
-    );
+    this->registered_checks.push_back({
+        [&]()->bool{ return (env->episode_length * env->step_dt) > time_range_[1]; },
+        FSMStringMap.right.at("Velocity"),
+        "time_range timeout"
+    });
+    this->registered_checks.push_back({
+        [&]()->bool{ return isaaclab::mdp::bad_orientation(env.get(), 1.0); },
+        FSMStringMap.right.at("Passive"),
+        "bad_orientation"
+    });
 }
 
 void State_Mimic::enter()
