@@ -219,12 +219,17 @@ State_Track::State_Track(int state_mode, std::string state_string)
     env->alg = std::make_unique<isaaclab::OrtRunner>(policy_dir / "exported" / "policy.onnx");
     spdlog::info("Track: ONNX session created successfully");
 
-    this->registered_checks.emplace_back(
-        std::make_pair(
-            [&]()->bool{ return isaaclab::mdp::bad_orientation(env.get(), 1.0); },
-            FSMStringMap.right.at("Passive")
-        )
-    );
+    // this->registered_checks.emplace_back(
+    //     std::make_pair(
+    //         [&]()->bool{ return isaaclab::mdp::bad_orientation(env.get(), 1.0); },
+    //         FSMStringMap.right.at("Passive")
+    //     )
+    // );
+    this->registered_checks.push_back({
+        .condition = [&]()->bool{ return isaaclab::mdp::bad_orientation(env.get(), 1.0); },
+        .target_state = FSMStringMap.right.at("Passive"),
+        .reason = "bad_orientation"
+    });
 }
 
 void State_Track::enter()

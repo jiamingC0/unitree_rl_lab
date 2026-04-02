@@ -9,6 +9,7 @@
 #include "unitree/dds_wrapper/common/Subscription.h"
 #include "unitree/dds_wrapper/common/crc.h"
 #include "unitree/dds_wrapper/common/unitree_joystick.hpp"
+#include "unitree/idl/go2/SportModeState_.hpp"
 #include "unitree/idl/hg/LowCmd_.hpp"
 #include "unitree/idl/hg/LowState_.hpp"
 
@@ -66,6 +67,14 @@ private:
     std::chrono::time_point<std::chrono::system_clock> last_joystick_time_;
 };
 
+class HighState : public SubscriptionBase<unitree_go::msg::dds_::SportModeState_>
+{
+public:
+    using SharedPtr = std::shared_ptr<HighState>;
+
+    HighState(std::string topic = "rt/sportmodestate") : SubscriptionBase<MsgType>(topic) {}
+};
+
 } // namespace subscription
 
 namespace publisher
@@ -92,3 +101,4 @@ private:
 
 using LowCmd_t = unitree::robot::r1::publisher::LowCmd;
 using LowState_t = unitree::robot::r1::subscription::LowState;
+using HighState_t = unitree::robot::r1::subscription::HighState;

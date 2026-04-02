@@ -3,17 +3,19 @@
 
 #pragma once
 
+#include <type_traits>
+
 #include "isaaclab/assets/articulation/articulation.h"
 
 namespace unitree
 {
 
-template <typename LowStatePtr>
+template <typename LowStatePtr, typename HighStatePtr = std::nullptr_t>
 class BaseArticulation : public isaaclab::Articulation
 {
 public:
-    BaseArticulation(LowStatePtr lowstate_)
-    : lowstate(lowstate_)
+    BaseArticulation(LowStatePtr lowstate_, HighStatePtr highstate_ = nullptr)
+    : lowstate(lowstate_), highstate(highstate_)
     {
         data.joystick = &lowstate->joystick;
     }
@@ -42,6 +44,7 @@ public:
     }
 
     LowStatePtr lowstate;
+    HighStatePtr highstate;
 };
 
 }
