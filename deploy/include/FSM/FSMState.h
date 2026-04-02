@@ -20,14 +20,13 @@ public:
             }
 
             int fsm_id = FSMStringMap.right.at(target_fsm);
-            registered_checks.emplace_back(
-                std::make_pair(
-                    [key]()->bool {
-                        return keyboard && keyboard->on_pressed && keyboard->key() == key;
-                    },
-                    fsm_id
-                )
-            );
+            registered_checks.push_back({
+                [key]()->bool {
+                    return keyboard && keyboard->on_pressed && keyboard->key() == key;
+                },
+                fsm_id,
+                "keyboard " + key
+            });
         };
 
         // Keyboard fallback for Sim2Sim when no joystick is available.
@@ -71,22 +70,20 @@ public:
                 unitree::common::dsl::Parser p(condition);
                 auto ast = p.Parse();
                 auto func = unitree::common::dsl::Compile(*ast);
-                registered_checks.emplace_back(
-                    std::make_pair(
-                        [func]()->bool{ return func(FSMState::lowstate->joystick); },
-                        fsm_id
-                    )
-                );
+                registered_checks.push_back({
+                    [func]()->bool{ return func(FSMState::lowstate->joystick); },
+                    fsm_id,
+                    "transition condition: " + condition
+                });
             }
         }
 
         // register for all states
-        registered_checks.emplace_back(
-            std::make_pair(
-                []()->bool{ return lowstate->isTimeout(); },
-                FSMStringMap.right.at("Passive")
-            )
-        );
+        registered_checks.push_back({
+            []()->bool{ return lowstate->isTimeout(); },
+            FSMStringMap.right.at("Passive"),
+            "lowstate timeout"
+        });
     }
 
     void pre_run()
@@ -102,5 +99,6 @@ public:
 
     static std::unique_ptr<LowCmd_t> lowcmd;
     static std::shared_ptr<LowState_t> lowstate;
+    static std::shared_ptr<HighState_t> highstate;
     static std::shared_ptr<Keyboard> keyboard;
 };

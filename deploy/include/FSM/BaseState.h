@@ -13,6 +13,13 @@ inline boost::bimap<int, std::string> FSMStringMap;
 class BaseState
 {
 public:
+    struct TransitionCheck
+    {
+        std::function<bool()> condition;
+        int target_state = 0;
+        std::string reason;
+    };
+
     BaseState(int state, std::string state_string) : state_(state) 
     {
         FSMStringMap.insert({state, state_string});
@@ -20,6 +27,7 @@ public:
 
     virtual void enter() {}
 
+    virtual double run_dt() const { return 0.001; }
     virtual void pre_run() {}
     virtual void run() {}
     virtual void post_run() {}
@@ -29,7 +37,7 @@ public:
     std::string getStateString() { return FSMStringMap.left.at(state_); }
     int getState() {return state_; }
     bool isState(int state) { return state_ == state; }
-    std::vector<std::pair<std::function<bool()>, int>> registered_checks;
+    std::vector<TransitionCheck> registered_checks;
 private:
     int state_;
 };
