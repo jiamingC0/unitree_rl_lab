@@ -197,6 +197,8 @@ State_Track::State_Track(int state_mode, std::string state_string)
     spdlog::info("Track: constructing state '{}'", state_string);
     auto cfg = param::config["FSM"][state_string];
     auto policy_dir = param::parser_policy_dir(cfg["policy_dir"].as<std::string>());
+    const std::string policy_file = cfg["policy_file"] ? cfg["policy_file"].as<std::string>() : "policy.onnx";
+    const auto policy_path = policy_dir / "exported" / policy_file;
 
     std::filesystem::path motion_file = cfg["motion_file"].as<std::string>();
     if (!motion_file.is_absolute()) {
@@ -215,8 +217,8 @@ State_Track::State_Track(int state_mode, std::string state_string)
     policy_kp_ = env->cfg["policy_kp"].as<std::vector<float>>();
     policy_kd_ = env->cfg["policy_kd"].as<std::vector<float>>();
     torque_limit_ = env->cfg["torque_limit"].as<std::vector<float>>();
-    spdlog::info("Track: deploy config loaded, constructing ONNX session '{}'", (policy_dir / "exported" / "policy.onnx").string());
-    env->alg = std::make_unique<isaaclab::OrtRunner>(policy_dir / "exported" / "policy.onnx");
+    spdlog::info("Track: deploy config loaded, constructing ONNX session '{}'", policy_path.string());
+    env->alg = std::make_unique<isaaclab::OrtRunner>(policy_path.string());
     spdlog::info("Track: ONNX session created successfully");
 
     // this->registered_checks.emplace_back(
