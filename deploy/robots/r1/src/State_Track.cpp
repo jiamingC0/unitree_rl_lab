@@ -138,7 +138,8 @@ void State_Track::ReferenceLoader::update(float time_s,
     const size_t pose_offset = frame_index * kKptCount * 16;
     root_height_ = kpt2gv_pose_seq_[pose_offset + 11];  // pelvis(0), row=2, col=3
     for (int i = 0; i < 3; ++i) {
-        root_gravity_[i] = -kpt2gv_pose_seq_[pose_offset + i * 4 + 2];
+        // root_gravity_[i] = -kpt2gv_pose_seq_[pose_offset + i * 4 + 2];
+        root_gravity_[i] = -kpt2gv_pose_seq_[pose_offset + 8 + i];
     }
 
     const size_t cvel_offset = frame_index * kKptCount * 6;
@@ -387,11 +388,7 @@ State_Track::State_Track(int state_mode, std::string state_string)
     //         FSMStringMap.right.at("Passive")
     //     )
     // );
-    this->registered_checks.push_back({
-        .condition = [&]()->bool{ return isaaclab::mdp::bad_orientation(env.get(), 1.0); },
-        .target_state = FSMStringMap.right.at("Passive"),
-        .reason = "bad_orientation"
-    });
+    // Temporarily disable bad_orientation-triggered state switch in Track.
 }
 
 void State_Track::enter()
