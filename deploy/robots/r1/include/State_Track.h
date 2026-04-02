@@ -16,14 +16,16 @@ public:
     {
     public:
         static constexpr int kJointDim = 24;
+        static constexpr int kQposDim = 31;
+        static constexpr int kKptCount = 14;
+        static constexpr uint32_t kCacheVersion = 4;
 
         // A compact runtime cache generated from the original NPZ track.
         struct Header
         {
             char magic[8];
             uint32_t version;
-            uint32_t frame_count;
-            uint32_t joint_dim;
+            uint32_t array_count;
         };
 
         ReferenceLoader(const std::filesystem::path& motion_file, float fps);
@@ -46,12 +48,9 @@ public:
         float fps_ = 50.0f;
         float duration_ = 0.0f;
 
-        std::vector<float> joint_pos_;
-        std::vector<float> root_height_seq_;
-        std::vector<float> root_gravity_seq_;
-        std::vector<float> root_cvel_seq_;
-        std::vector<float> yaw_cmd_seq_;
-        std::vector<float> xy_cmd_seq_;
+        std::vector<float> qpos_seq_;
+        std::vector<float> kpt2gv_pose_seq_;
+        std::vector<float> kpt_cvel_seq_;
 
         Eigen::VectorXf default_joint_pos_;
         Eigen::VectorXf joint_pos_rel_;
@@ -61,6 +60,8 @@ public:
         Eigen::Vector2f xy_cmd_ = Eigen::Vector2f::Zero();
         float root_height_ = 0.0f;
         size_t frame_count_ = 0;
+
+        float wrap_to_pi(float angle) const;
     };
 
     State_Track(int state_mode, std::string state_string = "Track");

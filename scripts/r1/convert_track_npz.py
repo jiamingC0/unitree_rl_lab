@@ -1,13 +1,7 @@
 #!/usr/bin/env python3
-"""Convert an R1 tracking NPZ file into a compact binary cache for deployment.
+"""Convert an R1 tracking NPZ file into a raw binary cache for deployment.
 
-The runtime controller only needs a subset of the original trajectory:
-- 24 joint positions
-- pelvis height in gv frame
-- pelvis gravity direction in gv frame
-- pelvis 6D velocity in gv frame
-- yaw command as [cos(yaw), sin(yaw)]
-- xy command in gv frame
+The cache stores all arrays from the source NPZ without preprocessing.
 """
 
 from __future__ import annotations
@@ -20,6 +14,16 @@ import numpy as np
 
 
 MAGIC = b"R1TRK01\x00"
+CACHE_VERSION = 4
+
+DTYPE_CODES = {
+    np.dtype(np.float32): 1,
+    np.dtype(np.float64): 2,
+    np.dtype(np.bool_): 3,
+    np.dtype(np.int32): 4,
+    np.dtype(np.int64): 5,
+    np.dtype(np.uint8): 6,
+}
 
 
 def parse_args() -> argparse.Namespace:
@@ -35,40 +39,26 @@ def main() -> None:
     dst = Path(args.output)
 
     data = np.load(src)
-    qpos = np.asarray(data["qpos"], dtype=np.float32)
-    kpt2gv_pose = np.asarray(data["kpt2gv_pose"], dtype=np.float32)
-    kpt_cvel_in_gv = np.asarray(data["kpt_cvel_in_gv"], dtype=np.float32)
-
-    if qpos.shape[1] != 31:
-        raise ValueError(f"Expected qpos second dim to be 31, got {qpos.shape}")
-    if kpt2gv_pose.shape[1:] != (14, 4, 4):
-        raise ValueError(f"Unexpected kpt2gv_pose shape: {kpt2gv_pose.shape}")
-    if kpt_cvel_in_gv.shape[1:] != (14, 6):
-        raise ValueError(f"Unexpected kpt_cvel_in_gv shape: {kpt_cvel_in_gv.shape}")
-
-    joint_pos = qpos[:, 7:31].astype(np.float32, copy=False)
-    pelvis_pose = kpt2gv_pose[:, 0].astype(np.float32, copy=False)
-    pelvis_cvel = kpt_cvel_in_gv[:, 0].astype(np.float32, copy=False)
-
-    root_height = pelvis_pose[:, 2, 3].astype(np.float32, copy=False)
-    root_gravity = (-pelvis_pose[:, 0:3, 2]).astype(np.float32, copy=False)
-
-    yaw = np.arctan2(pelvis_pose[:, 1, 0], pelvis_pose[:, 0, 0]).astype(np.float32, copy=False)
-    yaw_cmd = np.stack([np.cos(yaw), np.sin(yaw)], axis=1).astype(np.float32, copy=False)
-    xy_cmd = pelvis_pose[:, 0:2, 3].astype(np.float32, copy=False)
-
-    frame_count = int(joint_pos.shape[0])
-    joint_dim = int(joint_pos.shape[1])
+    arrays = {key: np.ascontiguousarray(np.asarray(data[key])) for key in data.files}
+    if "qpos" not in arrays or "kpt2gv_pose" not in arrays or "kpt_cvel_in_gv" not in arrays:
+        raise ValueError("Expected at least qpos, kpt2gv_pose, and kpt_cvel_in_gv in track npz")
 
     dst.parent.mkdir(parents=True, exist_ok=True)
     with dst.open("wb") as f:
-        f.write(struct.pack("<8sIII", MAGIC, 1, frame_count, joint_dim))
-        f.write(joint_pos.tobytes(order="C"))
-        f.write(root_height.tobytes(order="C"))
-        f.write(root_gravity.tobytes(order="C"))
-        f.write(pelvis_cvel.tobytes(order="C"))
-        f.write(yaw_cmd.tobytes(order="C"))
-        f.write(xy_cmd.tobytes(order="C"))
+        f.write(struct.pack("<8sII", MAGIC, CACHE_VERSION, len(arrays)))
+        for name, arr in arrays.items():
+            dtype = arr.dtype
+            if dtype not in DTYPE_CODES:
+                raise ValueError(f"Unsupported dtype for {name}: {dtype}")
+            name_bytes = name.encode("utf-8")
+            shape = arr.shape
+            f.write(struct.pack("<I", len(name_bytes)))
+            f.write(name_bytes)
+            f.write(struct.pack("<II", DTYPE_CODES[dtype], len(shape)))
+            if shape:
+                f.write(struct.pack("<" + "I" * len(shape), *shape))
+            f.write(struct.pack("<Q", arr.nbytes))
+            f.write(arr.tobytes(order="C"))
 
 
 if __name__ == "__main__":

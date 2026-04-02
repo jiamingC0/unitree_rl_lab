@@ -1,6 +1,7 @@
 #include "State_Track.h"
 
 #include <cmath>
+#include <cstring>
 #include <cstdlib>
 #include <sstream>
 #include <spdlog/spdlog.h>
@@ -10,6 +11,19 @@
 #include "isaaclab/envs/mdp/actions/joint_actions.h"
 
 std::shared_ptr<State_Track::ReferenceLoader> State_Track::reference = nullptr;
+
+namespace
+{
+enum class CacheDType : uint32_t
+{
+    Float32 = 1,
+    Float64 = 2,
+    Bool = 3,
+    Int32 = 4,
+    Int64 = 5,
+    UInt8 = 6,
+};
+}
 
 namespace isaaclab
 {
@@ -101,22 +115,39 @@ void State_Track::ReferenceLoader::update(float time_s)
     const float loop_time = duration_ > 0.0f ? std::fmod(std::max(time_s, 0.0f), duration_) : 0.0f;
     const size_t frame_index = std::min(static_cast<size_t>(std::round(loop_time * fps_)), frame_count_ - 1);
 
+    const size_t qpos_offset = frame_index * kQposDim;
     for (int i = 0; i < kJointDim; ++i) {
-        joint_pos_rel_[i] = joint_pos_[frame_index * kJointDim + i] - default_joint_pos_[i];
+        joint_pos_rel_[i] = qpos_seq_[qpos_offset + 7 + i] - default_joint_pos_[i];
     }
 
-    root_height_ = root_height_seq_[frame_index];
-
+    const size_t pose_offset = frame_index * kKptCount * 16;
+    root_height_ = kpt2gv_pose_seq_[pose_offset + 11];  // pelvis(0), row=2, col=3
     for (int i = 0; i < 3; ++i) {
-        root_gravity_[i] = root_gravity_seq_[frame_index * 3 + i];
+        root_gravity_[i] = -kpt2gv_pose_seq_[pose_offset + i * 4 + 2];
     }
+
+    const size_t cvel_offset = frame_index * kKptCount * 6;
     for (int i = 0; i < 6; ++i) {
-        root_cvel_in_gv_[i] = root_cvel_seq_[frame_index * 6 + i];
+        root_cvel_in_gv_[i] = kpt_cvel_seq_[cvel_offset + i];
     }
-    for (int i = 0; i < 2; ++i) {
-        yaw_cmd_[i] = yaw_cmd_seq_[frame_index * 2 + i];
-        xy_cmd_[i] = xy_cmd_seq_[frame_index * 2 + i];
+
+    // Keep command semantics unchanged with old cache: absolute yaw/xy from reference root pose.
+    float qw = qpos_seq_[qpos_offset + 3];
+    float qx = qpos_seq_[qpos_offset + 4];
+    float qy = qpos_seq_[qpos_offset + 5];
+    float qz = qpos_seq_[qpos_offset + 6];
+    const float norm = std::sqrt(qw * qw + qx * qx + qy * qy + qz * qz);
+    if (norm > 1e-8f) {
+        qw /= norm;
+        qx /= norm;
+        qy /= norm;
+        qz /= norm;
     }
+    const float yaw = std::atan2(2.0f * (qw * qz + qx * qy), 1.0f - 2.0f * (qy * qy + qz * qz));
+    yaw_cmd_[0] = std::cos(yaw);
+    yaw_cmd_[1] = std::sin(yaw);
+    xy_cmd_[0] = qpos_seq_[qpos_offset + 0];
+    xy_cmd_[1] = qpos_seq_[qpos_offset + 1];
 }
 
 std::filesystem::path State_Track::ReferenceLoader::ensure_cache_file(const std::filesystem::path& motion_file) const
@@ -129,8 +160,20 @@ std::filesystem::path State_Track::ReferenceLoader::ensure_cache_file(const std:
     auto cache_file = motion_file;
     cache_file.replace_extension(".r1trk");
 
-    const bool regenerate = !std::filesystem::exists(cache_file)
+    bool regenerate = !std::filesystem::exists(cache_file)
         || std::filesystem::last_write_time(cache_file) < std::filesystem::last_write_time(motion_file);
+
+    if (!regenerate) {
+        std::ifstream in(cache_file, std::ios::binary);
+        Header header{};
+        in.read(reinterpret_cast<char*>(&header), sizeof(header));
+        const bool header_ok = static_cast<bool>(in) && std::string(header.magic, header.magic + 7) == "R1TRK01";
+        if (!header_ok || header.version < kCacheVersion) {
+            regenerate = true;
+            spdlog::info("Track: cache '{}' is stale/incompatible, regenerating", cache_file.string());
+        }
+    }
+
     if (!regenerate) {
         spdlog::info("Track: reusing existing cache '{}'", cache_file.string());
         return cache_file;
@@ -166,29 +209,119 @@ void State_Track::ReferenceLoader::load_cache_file(const std::filesystem::path& 
     if (!in || std::string(header.magic, header.magic + 7) != "R1TRK01") {
         throw std::runtime_error("Invalid track cache header: " + cache_file.string());
     }
-    if (header.joint_dim != kJointDim) {
-        throw std::runtime_error("Unexpected joint dimension in track cache: " + cache_file.string());
+    if (header.version < kCacheVersion) {
+        throw std::runtime_error("Track cache version is too old; regenerate cache for: " + cache_file.string());
     }
 
-    frame_count_ = header.frame_count;
-    spdlog::info("Track: cache header ok, frame_count={}, joint_dim={}", frame_count_, header.joint_dim);
-    joint_pos_.resize(frame_count_ * kJointDim);
-    root_height_seq_.resize(frame_count_);
-    root_gravity_seq_.resize(frame_count_ * 3);
-    root_cvel_seq_.resize(frame_count_ * 6);
-    yaw_cmd_seq_.resize(frame_count_ * 2);
-    xy_cmd_seq_.resize(frame_count_ * 2);
+    auto dtype_item_size = [](CacheDType dtype) -> size_t {
+        switch (dtype) {
+            case CacheDType::Float32: return sizeof(float);
+            case CacheDType::Float64: return sizeof(double);
+            case CacheDType::Bool: return sizeof(bool);
+            case CacheDType::Int32: return sizeof(int32_t);
+            case CacheDType::Int64: return sizeof(int64_t);
+            case CacheDType::UInt8: return sizeof(uint8_t);
+        }
+        throw std::runtime_error("Unknown cache dtype");
+    };
 
-    in.read(reinterpret_cast<char*>(joint_pos_.data()), joint_pos_.size() * sizeof(float));
-    in.read(reinterpret_cast<char*>(root_height_seq_.data()), root_height_seq_.size() * sizeof(float));
-    in.read(reinterpret_cast<char*>(root_gravity_seq_.data()), root_gravity_seq_.size() * sizeof(float));
-    in.read(reinterpret_cast<char*>(root_cvel_seq_.data()), root_cvel_seq_.size() * sizeof(float));
-    in.read(reinterpret_cast<char*>(yaw_cmd_seq_.data()), yaw_cmd_seq_.size() * sizeof(float));
-    in.read(reinterpret_cast<char*>(xy_cmd_seq_.data()), xy_cmd_seq_.size() * sizeof(float));
+    bool found_qpos = false;
+    bool found_pose = false;
+    bool found_cvel = false;
 
-    if (!in) {
-        throw std::runtime_error("Failed to read complete track cache file: " + cache_file.string());
+    for (uint32_t array_idx = 0; array_idx < header.array_count; ++array_idx) {
+        uint32_t name_len = 0;
+        uint32_t dtype_code = 0;
+        uint32_t ndim = 0;
+        in.read(reinterpret_cast<char*>(&name_len), sizeof(name_len));
+        if (!in) {
+            throw std::runtime_error("Failed to read cache array name length: " + cache_file.string());
+        }
+
+        std::string name(name_len, '\0');
+        in.read(name.data(), name_len);
+        in.read(reinterpret_cast<char*>(&dtype_code), sizeof(dtype_code));
+        in.read(reinterpret_cast<char*>(&ndim), sizeof(ndim));
+        if (!in) {
+            throw std::runtime_error("Failed to read cache array header: " + cache_file.string());
+        }
+
+        std::vector<uint32_t> dims(ndim, 0);
+        if (ndim > 0) {
+            in.read(reinterpret_cast<char*>(dims.data()), sizeof(uint32_t) * ndim);
+            if (!in) {
+                throw std::runtime_error("Failed to read cache array dims: " + cache_file.string());
+            }
+        }
+
+        uint64_t byte_count = 0;
+        in.read(reinterpret_cast<char*>(&byte_count), sizeof(byte_count));
+        if (!in) {
+            throw std::runtime_error("Failed to read cache array byte count: " + cache_file.string());
+        }
+
+        const auto dtype = static_cast<CacheDType>(dtype_code);
+        const size_t item_size = dtype_item_size(dtype);
+        size_t element_count = 1;
+        for (uint32_t dim : dims) {
+            element_count *= dim;
+        }
+        if (element_count * item_size != byte_count) {
+            throw std::runtime_error("Cache array byte size mismatch for '" + name + "': " + cache_file.string());
+        }
+
+        std::vector<char> raw(byte_count);
+        if (byte_count > 0) {
+            in.read(raw.data(), static_cast<std::streamsize>(byte_count));
+            if (!in) {
+                throw std::runtime_error("Failed to read cache array payload for '" + name + "': " + cache_file.string());
+            }
+        }
+
+        auto convert_to_float = [&](std::vector<float>& out) {
+            out.resize(element_count);
+            if (dtype == CacheDType::Float32) {
+                std::memcpy(out.data(), raw.data(), byte_count);
+            } else if (dtype == CacheDType::Float64) {
+                const auto* src = reinterpret_cast<const double*>(raw.data());
+                for (size_t i = 0; i < element_count; ++i) {
+                    out[i] = static_cast<float>(src[i]);
+                }
+            } else {
+                throw std::runtime_error("Unsupported dtype for float conversion in array '" + name + "'");
+            }
+        };
+
+        if (name == "qpos") {
+            if (dims.size() != 2 || dims[1] != kQposDim) {
+                throw std::runtime_error("Unexpected qpos shape in cache: " + cache_file.string());
+            }
+            frame_count_ = dims[0];
+            convert_to_float(qpos_seq_);
+            found_qpos = true;
+        } else if (name == "kpt2gv_pose") {
+            if (dims.size() != 4 || dims[1] != kKptCount || dims[2] != 4 || dims[3] != 4) {
+                throw std::runtime_error("Unexpected kpt2gv_pose shape in cache: " + cache_file.string());
+            }
+            convert_to_float(kpt2gv_pose_seq_);
+            found_pose = true;
+        } else if (name == "kpt_cvel_in_gv") {
+            if (dims.size() != 3 || dims[1] != kKptCount || dims[2] != 6) {
+                throw std::runtime_error("Unexpected kpt_cvel_in_gv shape in cache: " + cache_file.string());
+            }
+            convert_to_float(kpt_cvel_seq_);
+            found_cvel = true;
+        }
     }
+
+    if (!found_qpos || !found_pose || !found_cvel) {
+        throw std::runtime_error("Track cache missing required arrays (qpos/kpt2gv_pose/kpt_cvel_in_gv): " + cache_file.string());
+    }
+}
+
+float State_Track::ReferenceLoader::wrap_to_pi(float angle) const
+{
+    return std::atan2(std::sin(angle), std::cos(angle));
 }
 
 State_Track::State_Track(int state_mode, std::string state_string)
