@@ -1,0 +1,99 @@
+controller:
+  mode_pr: 0
+  mode_machine: 0
+
+FSM:
+  _:
+    Passive:
+      id: 1
+    FixStand:
+      id: 2
+    Track:
+      id: 3
+      type: Track
+
+  Passive:
+    transitions:
+      FixStand: LT + up.on_pressed
+    mode: [
+      1,1,1,1,1,1,
+      1,1,1,1,1,1,
+      1,1,
+      0,
+      1,1,1,1,1,
+      0,0,
+      1,1,1,1,1,
+      0,0,
+      1,1,
+      0,0
+    ]
+    kd: [
+      8,8,8,8,10,10,
+      8,8,8,8,10,10,
+      8,8,
+      0,
+      2,2,2,2,2,
+      0,0,
+      2,2,2,2,2,
+      0,0,
+      2,0.5,
+      0,0
+    ]
+
+  FixStand:
+    transitions:
+      Passive: LT + B.on_pressed
+      Track: RB + X.on_pressed
+    kp: [
+      200,200,200,200,220,220,
+      200,200,200,200,220,220,
+      200,200,
+      0,
+      40,40,40,40,40,
+      0,0,
+      40,40,40,40,40,
+      0,0,
+      40,10,
+      0,0
+    ]
+    kd: [
+      8,8,8,8,10,10,
+      8,8,8,8,10,10,
+      8,8,
+      0,
+      2,2,2,2,2,
+      0,0,
+      2,2,2,2,2,
+      0,0,
+      2,0.5,
+      0,0
+    ]
+    ts: [0, 3]
+    qs: [
+      [],
+      [
+        -0.15,0,0,0.325,-0.15,0,
+        -0.15,0,0,0.325,-0.15,0,
+        0,0,
+        0,
+        0,0.1745,0,1.5708,0,
+        0,0,
+        0,-0.1745,0,1.5708,0,
+        0,0,
+        0,0,
+        0,0
+      ]
+    ]
+
+  Track:
+    transitions:
+      Passive: LT + B.on_pressed
+    policy_dir: config/policy/track
+    policy_file: model_15000.onnx
+    motion_file: config/policy/track/params/20260320_100654_645_jiaxin_segment_010_30794_34349.npz
+    fps: 50
+    no_global_mode: true
+    use_motion_root_command: false
+    use_motion_velocity_command: false
+    debug_dump_first_frame: true
+    debug_dump_dir: debug/et1_track_first_frame
