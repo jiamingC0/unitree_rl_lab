@@ -2,6 +2,7 @@
 #include "FSM/State_Passive.h"
 #include "FSM/State_FixStand.h"
 #include "FSM/State_RLBase.h"
+#include "State_Velocity.h"
 #include "State_Track.h"
 
 std::unique_ptr<LowCmd_t> FSMState::lowcmd = nullptr;

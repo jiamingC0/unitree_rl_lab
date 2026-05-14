@@ -80,6 +80,29 @@ REGISTER_OBSERVATION(command_jnt_vel)
     return std::vector<float>(data.data(), data.data() + data.size());
 }
 
+REGISTER_OBSERVATION(motion_command)
+{
+    if (!State_Track::reference) {
+        throw std::runtime_error("State_Track::reference is null while computing motion_command.");
+    }
+    const auto& pos = State_Track::reference->command_joint_pos();
+    const auto& vel = State_Track::reference->command_joint_vel();
+    std::vector<float> data;
+    data.reserve(pos.size() + vel.size());
+    data.insert(data.end(), pos.data(), pos.data() + pos.size());
+    data.insert(data.end(), vel.data(), vel.data() + vel.size());
+    return data;
+}
+
+REGISTER_OBSERVATION(motion_anchor_ori_b)
+{
+    if (!State_Track::reference) {
+        throw std::runtime_error("State_Track::reference is null while computing motion_anchor_ori_b.");
+    }
+    const auto& data = State_Track::reference->command_root_ori_b();
+    return std::vector<float>(data.data(), data.data() + data.size());
+}
+
 }
 }
 
@@ -390,6 +413,7 @@ State_Track::State_Track(int state_mode, std::string state_string)
         spdlog::info("Track: first-frame debug dump enabled at '{}'", debug_dump_dir_.string());
     }
     const std::string policy_file = cfg["policy_file"] ? cfg["policy_file"].as<std::string>() : "policy.onnx";
+    const std::string deploy_file = cfg["deploy_file"] ? cfg["deploy_file"].as<std::string>() : "deploy.yaml";
     const auto policy_path = policy_dir / "exported" / policy_file;
 
     std::filesystem::path motion_file = cfg["motion_file"].as<std::string>();
@@ -401,9 +425,9 @@ State_Track::State_Track(int state_mode, std::string state_string)
     reference = reference_;
     spdlog::info("Track: reference pointer initialized");
 
-    spdlog::info("Track: loading deploy config '{}'", (policy_dir / "params" / "deploy.yaml").string());
+    spdlog::info("Track: loading deploy config '{}'", (policy_dir / "params" / deploy_file).string());
     env = std::make_unique<isaaclab::ManagerBasedRLEnv>(
-        YAML::LoadFile(policy_dir / "params" / "deploy.yaml"),
+        YAML::LoadFile(policy_dir / "params" / deploy_file),
         std::make_shared<unitree::BaseArticulation<LowState_t::SharedPtr, HighState_t::SharedPtr>>(
             FSMState::lowstate, FSMState::highstate)
     );

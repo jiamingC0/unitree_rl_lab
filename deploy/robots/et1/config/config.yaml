@@ -8,9 +8,18 @@ FSM:
       id: 1
     FixStand:
       id: 2
-    Track:
+    Velocity:
       id: 3
+      type: Velocity
+    WindSummer:
+      id: 101
       type: Track
+    GeneralTracker:
+      id: 201
+      type: Track
+    # PokerFace:
+    #   id: 102
+    #   type: Track
 
   Passive:
     transitions:
@@ -43,7 +52,7 @@ FSM:
   FixStand:
     transitions:
       Passive: LT + B.on_pressed
-      Track: RB + X.on_pressed
+      Velocity: RB + X.on_pressed
     kp: [
       200,200,200,200,220,220,
       200,200,200,200,220,220,
@@ -85,15 +94,51 @@ FSM:
       ]
     ]
 
-  Track:
+  Velocity:
     transitions:
       Passive: LT + B.on_pressed
-    policy_dir: config/policy/track
-    policy_file: model_15000.onnx
-    motion_file: config/policy/track/params/20260320_100654_645_jiaxin_segment_010_30794_34349.npz
+      WindSummer: LT(2s) + down.on_pressed
+      GeneralTracker: LT(2s) + up.on_pressed
+      # PokerFace: LT(2s) + right.on_pressed
+    policy_dir: config/policy/velocity/v0
+
+  WindSummer:
+    transitions:
+      Passive: LT + B.on_pressed
+      Velocity: RB + X.on_pressed
+    policy_dir: config/policy/dance/wind_summer
+    policy_file: policy.onnx
+    deploy_file: deploy.yaml
+    motion_file: config/policy/dance/wind_summer/params/wind_summer.et1trk
+    fps: 50
+    no_global_mode: true
+    use_motion_root_command: true
+    use_motion_velocity_command: false
+
+  GeneralTracker:
+    transitions:
+      Passive: LT + B.on_pressed
+      Velocity: RB + X.on_pressed
+    policy_dir: config/policy/general_tracker/et1Tracker
+    policy_file: policy.onnx
+    deploy_file: deploy.yaml
+    motion_file: config/policy/general_tracker/et1Tracker/params/default.et1trk
     fps: 50
     no_global_mode: true
     use_motion_root_command: false
     use_motion_velocity_command: false
     debug_dump_first_frame: true
     debug_dump_dir: debug/et1_track_first_frame
+
+  # PokerFace:
+  #   transitions:
+  #     Passive: LT + B.on_pressed
+  #     Velocity: RB + X.on_pressed
+  #   policy_dir: config/policy/dance/poker_face
+  #   policy_file: policy.onnx
+  #   deploy_file: deploy.yaml
+  #   motion_file: config/policy/dance/poker_face/params/poker_face.et1trk
+  #   fps: 50
+  #   no_global_mode: true
+  #   use_motion_root_command: true
+  #   use_motion_velocity_command: false
