@@ -107,6 +107,11 @@ observations:
       clip: null
       scale: null
       history_length: 1
+    command_foot_support_state:
+      params: {}
+      clip: null
+      scale: null
+      history_length: 1
   obs_history:
     use_gym_history: true
     command_root_ori_b:
@@ -140,6 +145,11 @@ observations:
       scale: null
       history_length: 25
     joint_vel_rel:
+      params: {}
+      clip: null
+      scale: null
+      history_length: 25
+    command_foot_support_state:
       params: {}
       clip: null
       scale: null

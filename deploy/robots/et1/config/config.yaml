@@ -121,10 +121,10 @@ FSM:
       Velocity: "2"
       Dance1: "4"
       Dance2: "5"
-    policy_dir: config/policy/general_tracker/et1Tracker
-    policy_file: policy.onnx
+    policy_dir: config/policy/general_tracker
+    policy_file: model_19999.onnx
     deploy_file: deploy.yaml
-    motion_file: config/policy/general_tracker/et1Tracker/params/default.et1trk
+    motion_file: config/policy/general_tracker/params/poker_face.et1trk
     fps: 50
     no_global_mode: true
     use_motion_root_command: false

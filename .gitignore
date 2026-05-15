@@ -79,3 +79,4 @@ tmp/*
 deploy/robots/r1/log/*
 
 .codex
+.venv
