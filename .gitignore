@@ -80,3 +80,4 @@ deploy/robots/r1/log/*
 
 .codex
 .venv
+deploy/robots/et1/debug/*
