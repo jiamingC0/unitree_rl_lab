@@ -102,6 +102,7 @@ private:
 
     std::unique_ptr<isaaclab::ManagerBasedRLEnv> env;
     std::shared_ptr<ReferenceLoader> reference_;
+    std::vector<int> override_joint_ids_;  // Joints whose positions are overridden by reference motion
     std::vector<float> policy_kp_;
     std::vector<float> policy_kd_;
     std::filesystem::path debug_dump_dir_;

@@ -121,6 +121,7 @@ FSM:
       Velocity: "2"
       Dance1: "4"
       Dance2: "5"
+    override_joint_ids: [24, 25]   # 覆盖第25、26关节（头部）
     policy_dir: config/policy/general_tracker
     policy_file: model_19999.onnx
     deploy_file: deploy.yaml
@@ -141,6 +142,7 @@ FSM:
       Velocity: "2"
       GeneralTracker: "3"
       Dance2: "5"
+    override_joint_ids: [24, 25]   # 覆盖第25、26关节（头部）
     policy_dir: config/policy/dance/wind_summer
     policy_file: policy.onnx
     deploy_file: deploy.yaml
@@ -159,6 +161,7 @@ FSM:
       Velocity: "2"
       GeneralTracker: "3"
       Dance1: "4"
+    override_joint_ids: [24, 25]   # 覆盖第25、26关节（头部）
     policy_dir: config/policy/dance/poker_face
     policy_file: policy.onnx
     deploy_file: deploy.yaml
