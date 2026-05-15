@@ -44,6 +44,7 @@ public:
         const Eigen::VectorXf& command_joint_vel() const { return joint_vel_; }
         const Eigen::Matrix<float, 6, 1>& command_root_ori_b() const { return root_ori_b_; }
         const Eigen::Vector3f& command_xy_yaw_vel() const { return xy_yaw_vel_; }
+        const Eigen::Matrix<float, 6, 1>& command_foot_support_state() const { return foot_support_state_; }
         float duration() const { return duration_; }
 
     private:
@@ -59,12 +60,15 @@ public:
         std::vector<float> body_quat_w_seq_;
         std::vector<float> body_lin_vel_w_seq_;
         std::vector<float> body_ang_vel_w_seq_;
+        std::vector<int64_t> left_foot_contact_state_seq_;
+        std::vector<int64_t> right_foot_contact_state_seq_;
 
         Eigen::VectorXf default_joint_pos_;
         Eigen::VectorXf joint_pos_;
         Eigen::VectorXf joint_vel_;
         Eigen::Matrix<float, 6, 1> root_ori_b_ = Eigen::Matrix<float, 6, 1>::Zero();
         Eigen::Vector3f xy_yaw_vel_ = Eigen::Vector3f::Zero();
+        Eigen::Matrix<float, 6, 1> foot_support_state_ = Eigen::Matrix<float, 6, 1>::Zero();
         size_t frame_count_ = 0;
 
         float wrap_to_pi(float angle) const;
@@ -92,6 +96,9 @@ private:
     void write_npy_header(std::ofstream& out,
                           const std::string& descr,
                           const std::vector<size_t>& shape) const;
+    void open_observation_dump();
+    void dump_observation_frame(const std::unordered_map<std::string, std::vector<float>>& obs);
+    void close_observation_dump();
 
     std::unique_ptr<isaaclab::ManagerBasedRLEnv> env;
     std::shared_ptr<ReferenceLoader> reference_;
@@ -105,6 +112,10 @@ private:
     bool no_global_mode_ = false;
     bool has_initial_yaw_bias_ = false;
     float initial_yaw_bias_ = 0.0f;
+    bool observation_dump_enabled_ = false;
+    std::filesystem::path observation_dump_file_;
+    std::ofstream observation_dump_stream_;
+    size_t observation_dump_frame_ = 0;
 };
 
 REGISTER_FSM(State_Track)

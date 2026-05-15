@@ -23,6 +23,7 @@ DTYPE_CODES = {
     np.dtype(np.int32): 4,
     np.dtype(np.int64): 5,
     np.dtype(np.uint8): 6,
+    np.dtype(np.int8): 7,
 }
 
 
@@ -51,6 +52,9 @@ def main() -> None:
     if missing:
         raise ValueError(f"Expected ET1 motion arrays missing from npz: {sorted(missing)}")
     arrays = {key: np.ascontiguousarray(np.asarray(data[key])) for key in required}
+    for key in ("left_foot_contact_state", "right_foot_contact_state"):
+        if key in data.files:
+            arrays[key] = np.ascontiguousarray(np.asarray(data[key]))
 
     dst.parent.mkdir(parents=True, exist_ok=True)
     with dst.open("wb") as f:

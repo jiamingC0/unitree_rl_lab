@@ -65,82 +65,48 @@ torque_limit: [100.0, 100.0, 100.0, 100.0, 100.0, 100.0,
                33.0, 33.0, 33.0, 33.0, 33.0,
                33.0, 3.1]
 observations:
-  obs_current:
-    use_gym_history: true
-    command_root_ori_b:
-      params: {}
-      clip: null
-      scale: null
-      history_length: 1
-    command_xy_yaw_vel:
-      params: {}
-      clip: null
-      scale: null
-      history_length: 1
-    command_jnt_pos:
-      params: {}
-      clip: null
-      scale: null
-      history_length: 1
-    projected_gravity:
-      params: {}
-      clip: null
-      scale: null
-      history_length: 1
-    base_ang_vel:
-      params: {}
-      clip: null
-      scale: null
-      history_length: 1
-    joint_pos_rel:
-      params: {}
-      clip: null
-      scale: null
-      history_length: 1
-    joint_vel_rel:
-      params: {}
-      clip: null
-      scale: null
-      history_length: 1
-    last_action:
-      params: {}
-      clip: null
-      scale: null
-      history_length: 1
-  obs_history:
-    use_gym_history: true
-    command_root_ori_b:
-      params: {}
-      clip: null
-      scale: null
-      history_length: 25
-    command_xy_yaw_vel:
-      params: {}
-      clip: null
-      scale: null
-      history_length: 25
-    command_jnt_pos:
-      params: {}
-      clip: null
-      scale: null
-      history_length: 25
-    projected_gravity:
-      params: {}
-      clip: null
-      scale: null
-      history_length: 25
-    base_ang_vel:
-      params: {}
-      clip: null
-      scale: null
-      history_length: 25
-    joint_pos_rel:
-      params: {}
-      clip: null
-      scale: null
-      history_length: 25
-    joint_vel_rel:
-      params: {}
-      clip: null
-      scale: null
-      history_length: 25
+  command_root_ori_b:
+    params: {}
+    clip: null
+    scale: null
+    history_length: 1
+  command_xy_yaw_vel:
+    params: {}
+    clip: null
+    scale: null
+    history_length: 1
+  command_jnt_pos:
+    params: {}
+    clip: null
+    scale: null
+    history_length: 1
+  projected_gravity:
+    params: {}
+    clip: null
+    scale: null
+    history_length: 1
+  base_ang_vel:
+    params: {}
+    clip: null
+    scale: null
+    history_length: 1
+  joint_pos_rel:
+    params: {}
+    clip: null
+    scale: null
+    history_length: 1
+  joint_vel_rel:
+    params: {}
+    clip: null
+    scale: null
+    history_length: 1
+  last_action:
+    params: {}
+    clip: null
+    scale: null
+    history_length: 1
+  command_foot_support_state:
+    params: {}
+    clip: null
+    scale: null
+    history_length: 1

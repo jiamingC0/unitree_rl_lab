@@ -49,6 +49,16 @@ public:
             register_keyboard_transition("2", "Velocity");
         }
 
+        auto keyboard_transitions = param::config["FSM"][state_string]["keyboard_transitions"];
+        if (keyboard_transitions)
+        {
+            auto keyboard_transition_map = keyboard_transitions.as<std::map<std::string, std::string>>();
+            for (auto it = keyboard_transition_map.begin(); it != keyboard_transition_map.end(); ++it)
+            {
+                register_keyboard_transition(it->second, it->first);
+            }
+        }
+
         auto transitions = param::config["FSM"][state_string]["transitions"];
 
         if(transitions)

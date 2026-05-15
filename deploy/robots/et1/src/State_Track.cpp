@@ -4,6 +4,7 @@
 #include <cmath>
 #include <cstring>
 #include <cstdlib>
+#include <iomanip>
 #include <limits>
 #include <sstream>
 #include <spdlog/spdlog.h>
@@ -24,6 +25,7 @@ enum class CacheDType : uint32_t
     Int32 = 4,
     Int64 = 5,
     UInt8 = 6,
+    Int8 = 7,
 };
 
 float quat_to_yaw(float qw, float qx, float qy, float qz)
@@ -100,6 +102,15 @@ REGISTER_OBSERVATION(motion_anchor_ori_b)
         throw std::runtime_error("State_Track::reference is null while computing motion_anchor_ori_b.");
     }
     const auto& data = State_Track::reference->command_root_ori_b();
+    return std::vector<float>(data.data(), data.data() + data.size());
+}
+
+REGISTER_OBSERVATION(command_foot_support_state)
+{
+    if (!State_Track::reference) {
+        throw std::runtime_error("State_Track::reference is null while computing command_foot_support_state.");
+    }
+    const auto& data = State_Track::reference->command_foot_support_state();
     return std::vector<float>(data.data(), data.data() + data.size());
 }
 
@@ -190,6 +201,18 @@ void State_Track::ReferenceLoader::update(float time_s,
     } else {
         xy_yaw_vel_.setZero();
     }
+
+    foot_support_state_.setZero();
+    if (!left_foot_contact_state_seq_.empty() && !right_foot_contact_state_seq_.empty()) {
+        const int left_state = static_cast<int>(left_foot_contact_state_seq_[frame_index]);
+        const int right_state = static_cast<int>(right_foot_contact_state_seq_[frame_index]);
+        if (left_state >= 0 && left_state <= 2) {
+            foot_support_state_[left_state] = 1.0f;
+        }
+        if (right_state >= 0 && right_state <= 2) {
+            foot_support_state_[3 + right_state] = 1.0f;
+        }
+    }
 }
 
 std::filesystem::path State_Track::ReferenceLoader::ensure_cache_file(const std::filesystem::path& motion_file) const
@@ -263,6 +286,7 @@ void State_Track::ReferenceLoader::load_cache_file(const std::filesystem::path& 
             case CacheDType::Int32: return sizeof(int32_t);
             case CacheDType::Int64: return sizeof(int64_t);
             case CacheDType::UInt8: return sizeof(uint8_t);
+            case CacheDType::Int8: return sizeof(int8_t);
         }
         throw std::runtime_error("Unknown cache dtype");
     };
@@ -336,6 +360,29 @@ void State_Track::ReferenceLoader::load_cache_file(const std::filesystem::path& 
                 throw std::runtime_error("Unsupported dtype for float conversion in array '" + name + "'");
             }
         };
+        auto convert_to_int64 = [&](std::vector<int64_t>& out) {
+            out.resize(element_count);
+            if (dtype == CacheDType::Int64) {
+                std::memcpy(out.data(), raw.data(), byte_count);
+            } else if (dtype == CacheDType::Int32) {
+                const auto* src = reinterpret_cast<const int32_t*>(raw.data());
+                for (size_t i = 0; i < element_count; ++i) {
+                    out[i] = static_cast<int64_t>(src[i]);
+                }
+            } else if (dtype == CacheDType::UInt8) {
+                const auto* src = reinterpret_cast<const uint8_t*>(raw.data());
+                for (size_t i = 0; i < element_count; ++i) {
+                    out[i] = static_cast<int64_t>(src[i]);
+                }
+            } else if (dtype == CacheDType::Int8) {
+                const auto* src = reinterpret_cast<const int8_t*>(raw.data());
+                for (size_t i = 0; i < element_count; ++i) {
+                    out[i] = static_cast<int64_t>(src[i]);
+                }
+            } else {
+                throw std::runtime_error("Unsupported dtype for int conversion in array '" + name + "'");
+            }
+        };
 
         if (name == "joint_pos") {
             if (dims.size() != 2 || dims[1] != kJointDim) {
@@ -374,12 +421,26 @@ void State_Track::ReferenceLoader::load_cache_file(const std::filesystem::path& 
             }
             convert_to_float(body_ang_vel_w_seq_);
             found_body_ang_vel = true;
+        } else if (name == "left_foot_contact_state") {
+            if (dims.size() != 1) {
+                throw std::runtime_error("Unexpected left_foot_contact_state shape in cache: " + cache_file.string());
+            }
+            convert_to_int64(left_foot_contact_state_seq_);
+        } else if (name == "right_foot_contact_state") {
+            if (dims.size() != 1) {
+                throw std::runtime_error("Unexpected right_foot_contact_state shape in cache: " + cache_file.string());
+            }
+            convert_to_int64(right_foot_contact_state_seq_);
         }
     }
 
     if (!found_joint_pos || !found_joint_vel || !found_body_pos || !found_body_quat
         || !found_body_lin_vel || !found_body_ang_vel) {
         throw std::runtime_error("ET1 track cache missing required motion arrays: " + cache_file.string());
+    }
+    if ((!left_foot_contact_state_seq_.empty() && left_foot_contact_state_seq_.size() != frame_count_)
+        || (!right_foot_contact_state_seq_.empty() && right_foot_contact_state_seq_.size() != frame_count_)) {
+        throw std::runtime_error("Foot contact state length mismatch in cache: " + cache_file.string());
     }
 }
 
@@ -412,6 +473,18 @@ State_Track::State_Track(int state_mode, std::string state_string)
     if (debug_dump_first_frame_) {
         spdlog::info("Track: first-frame debug dump enabled at '{}'", debug_dump_dir_.string());
     }
+
+    observation_dump_enabled_ = cfg["dump_observations"].as<bool>(state_string == "Dance2");
+    observation_dump_file_ = cfg["observation_dump_file"]
+        ? std::filesystem::path(cfg["observation_dump_file"].as<std::string>())
+        : std::filesystem::path("debug/dance2_pokerface_observations.txt");
+    if (!observation_dump_file_.is_absolute()) {
+        observation_dump_file_ = param::proj_dir / observation_dump_file_;
+    }
+    if (observation_dump_enabled_) {
+        spdlog::info("Track: per-frame observation dump enabled at '{}'", observation_dump_file_.string());
+    }
+
     const std::string policy_file = cfg["policy_file"] ? cfg["policy_file"].as<std::string>() : "policy.onnx";
     const std::string deploy_file = cfg["deploy_file"] ? cfg["deploy_file"].as<std::string>() : "deploy.yaml";
     const auto policy_path = policy_dir / "exported" / policy_file;
@@ -452,6 +525,7 @@ void State_Track::enter()
     has_initial_yaw_bias_ = false;
     initial_yaw_bias_ = 0.0f;
     first_frame_debug_dumped_ = false;
+    open_observation_dump();
     for (int i = 0; i < lowcmd->msg_.motor_cmd().size(); ++i)
     {
         lowcmd->msg_.motor_cmd()[i].kp() = 0.0f;
@@ -510,17 +584,25 @@ void State_Track::run()
     if (has_current_root_xy) {
         current_root_xy = live_state.root_pos_w.head<2>();
     }
+    Eigen::Quaternionf current_root_quat_used = live_state.root_quat_w;
+    if (no_global_mode_ && has_initial_yaw_bias_) {
+        const Eigen::Quaternionf yaw_bias_q(
+            Eigen::AngleAxisf(initial_yaw_bias_, Eigen::Vector3f::UnitZ())
+        );
+        current_root_quat_used = (yaw_bias_q.conjugate() * live_state.root_quat_w).normalized();
+    }
     reference_->update((env->episode_length + 1) * env->step_dt,
                        no_global_mode_,
                        has_current_root_xy,
                        current_root_xy,
                        current_root_yaw_used,
-                       live_state.root_quat_w,
+                       current_root_quat_used,
                        use_motion_root_command_,
                        use_motion_velocity_command_);
     env->episode_length += 1;
     env->robot->update();
     const auto obs = env->observation_manager->compute();
+    dump_observation_frame(obs);
     const auto action = env->alg->act(obs);
     env->action_manager->process_action(action);
     auto target_q = env->action_manager->processed_actions();
@@ -545,6 +627,73 @@ void State_Track::run()
 void State_Track::exit()
 {
     spdlog::info("Track: exit");
+    close_observation_dump();
+}
+
+void State_Track::open_observation_dump()
+{
+    observation_dump_frame_ = 0;
+    if (!observation_dump_enabled_) {
+        return;
+    }
+
+    try {
+        std::filesystem::create_directories(observation_dump_file_.parent_path());
+        observation_dump_stream_.open(observation_dump_file_, std::ios::out | std::ios::trunc);
+        if (!observation_dump_stream_) {
+            throw std::runtime_error("Failed to open observation dump file: " + observation_dump_file_.string());
+        }
+        observation_dump_stream_ << std::setprecision(9);
+        observation_dump_stream_ << "# ET1 Track observation dump\n";
+        observation_dump_stream_ << "# state " << getStateString() << "\n";
+        observation_dump_stream_ << "# dt " << env->step_dt << "\n";
+        observation_dump_stream_ << "# format: frame <index> episode_length <count> time_s <seconds>\n";
+        observation_dump_stream_ << "# then one line per observation group: obs <name> size <n> values <v0> ...\n";
+        spdlog::info("Track: writing per-frame observations to '{}'", observation_dump_file_.string());
+    } catch (const std::exception& e) {
+        observation_dump_enabled_ = false;
+        spdlog::error("Track: disabling observation dump: {}", e.what());
+    }
+}
+
+void State_Track::dump_observation_frame(const std::unordered_map<std::string, std::vector<float>>& obs)
+{
+    if (!observation_dump_enabled_ || !observation_dump_stream_) {
+        return;
+    }
+
+    std::vector<std::string> names;
+    names.reserve(obs.size());
+    for (const auto& item : obs) {
+        names.push_back(item.first);
+    }
+    std::sort(names.begin(), names.end());
+
+    observation_dump_stream_ << "frame " << observation_dump_frame_
+                             << " episode_length " << env->episode_length
+                             << " time_s " << (env->episode_length * env->step_dt)
+                             << "\n";
+    for (const auto& name : names) {
+        const auto& values = obs.at(name);
+        observation_dump_stream_ << "obs " << name << " size " << values.size() << " values";
+        for (float value : values) {
+            observation_dump_stream_ << " " << value;
+        }
+        observation_dump_stream_ << "\n";
+    }
+    observation_dump_stream_ << "\n";
+    observation_dump_stream_.flush();
+    ++observation_dump_frame_;
+}
+
+void State_Track::close_observation_dump()
+{
+    if (observation_dump_stream_) {
+        spdlog::info("Track: closed observation dump '{}' after {} frames",
+                     observation_dump_file_.string(),
+                     observation_dump_frame_);
+        observation_dump_stream_.close();
+    }
 }
 
 void State_Track::dump_first_frame_debug(const std::unordered_map<std::string, std::vector<float>>& obs,

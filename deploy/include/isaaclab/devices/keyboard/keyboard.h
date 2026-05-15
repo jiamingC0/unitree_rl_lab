@@ -6,6 +6,7 @@
 #include <termios.h>
 #include <unistd.h>
 #include <thread>
+#include <atomic>
 
 
 /**
@@ -26,7 +27,7 @@ public:
 
     _thread_running  = true;
     _readThread = std::thread([this] {
-      while (_running) {
+      while (_thread_running) {
         _read();
       }
     });
@@ -35,6 +36,10 @@ public:
   ~Keyboard()
   {
     _thread_running = false;
+    _running = false;
+    if (_readThread.joinable()) {
+      _readThread.join();
+    }
     _pauseKey();
   }
 
@@ -91,8 +96,8 @@ public:
   bool on_released = false;
 
   private:
-  bool _thread_running = false;
-  bool _running = false;
+  std::atomic_bool _thread_running = false;
+  std::atomic_bool _running = false;
   std::thread _readThread;
 
   void _read()
