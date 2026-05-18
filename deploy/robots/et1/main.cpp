@@ -52,8 +52,8 @@ int main(int argc, char** argv)
     auto fsm = std::make_unique<CtrlFSM>(param::config["FSM"]);
     fsm->start();
 
-    std::cout << "Keyboard: [1] FixStand, [2] Velocity, [3] GeneralTracker, [4] Dance1/Wind Summer, [5] Dance2/PokerFace, [0] Passive.\n";
-    std::cout << "Joystick: FixStand [LT+Up], Velocity [RB+X], GeneralTracker [LT(2s)+Up], Dance1 [LT(2s)+Down], Dance2 [LT(2s)+Right].\n";
+    std::cout << "Keyboard: [1] FixStand, [2] Velocity, [3] GeneralTracker, [4] Dance1/Wind Summer, [5] Dance2/PokerFace, [6] NoHeadPokerFace, [0] Passive.\n";
+    std::cout << "Joystick: FixStand [LT+Up], Velocity [RB+X], GeneralTracker [LT(2s)+Up], Dance1 [LT(2s)+Down], Dance2 [LT(2s)+Right], NoHeadPokerFace [LT(2s)+Left].\n";
 
     while (true)
     {

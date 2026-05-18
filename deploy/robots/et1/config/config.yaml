@@ -20,6 +20,9 @@ FSM:
     Dance2:
       id: 102
       type: Track
+    NoHeadPokerFace:
+      id: 103
+      type: Track
 
   Passive:
     transitions:
@@ -105,11 +108,13 @@ FSM:
       GeneralTracker: LT(2s) + up.on_pressed
       Dance1: LT(2s) + down.on_pressed
       Dance2: LT(2s) + right.on_pressed
+      NoHeadPokerFace: LT(2s) + left.on_pressed
     keyboard_transitions:
       Passive: "0"
       GeneralTracker: "3"
       Dance1: "4"
       Dance2: "5"
+      NoHeadPokerFace: "6"
     policy_dir: config/policy/velocity/v0
 
   GeneralTracker:
@@ -121,6 +126,7 @@ FSM:
       Velocity: "2"
       Dance1: "4"
       Dance2: "5"
+      NoHeadPokerFace: "6"
     override_joint_ids: [24, 25]   # 覆盖第25、26关节（头部）
     policy_dir: config/policy/general_tracker
     policy_file: model_19999.onnx
@@ -142,6 +148,7 @@ FSM:
       Velocity: "2"
       GeneralTracker: "3"
       Dance2: "5"
+      NoHeadPokerFace: "6"
     override_joint_ids: [24, 25]   # 覆盖第25、26关节（头部）
     policy_dir: config/policy/dance/wind_summer
     policy_file: policy.onnx
@@ -161,6 +168,7 @@ FSM:
       Velocity: "2"
       GeneralTracker: "3"
       Dance1: "4"
+      NoHeadPokerFace: "6"
     override_joint_ids: [24, 25]   # 覆盖第25、26关节（头部）
     policy_dir: config/policy/dance/poker_face
     policy_file: policy.onnx
@@ -172,3 +180,24 @@ FSM:
     use_motion_velocity_command: false
     dump_observations: true
     observation_dump_file: debug/dance2_pokerface_observations.txt
+
+  NoHeadPokerFace:
+    transitions:
+      Passive: LT + B.on_pressed
+      Velocity: RB + X.on_pressed
+    keyboard_transitions:
+      Passive: "0"
+      Velocity: "2"
+      GeneralTracker: "3"
+      Dance1: "4"
+      Dance2: "5"
+    policy_dir: config/policy/dance/nohead_poker_face
+    policy_file: policy.onnx
+    deploy_file: deploy.yaml
+    motion_file: config/policy/dance/nohead_poker_face/params/poker_face.npz
+    fps: 50
+    no_global_mode: true
+    use_motion_root_command: false
+    use_motion_velocity_command: false
+    dump_observations: true
+    observation_dump_file: debug/nohead_poker_face_observations.txt

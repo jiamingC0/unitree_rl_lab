@@ -70,6 +70,18 @@ REGISTER_OBSERVATION(command_jnt_pos)
         throw std::runtime_error("State_Track::reference is null while computing command_jnt_pos.");
     }
     const auto & data = State_Track::reference->command_joint_pos();
+    const auto& joint_ids = env->robot->data.joint_ids_map;
+    if (!joint_ids.empty() && joint_ids.size() != static_cast<size_t>(data.size())) {
+        std::vector<float> selected;
+        selected.reserve(joint_ids.size());
+        for (const auto joint_id : joint_ids) {
+            if (joint_id < 0 || joint_id >= data.size()) {
+                throw std::runtime_error("command_jnt_pos joint_ids_map index is out of range.");
+            }
+            selected.push_back(data[joint_id]);
+        }
+        return selected;
+    }
     return std::vector<float>(data.data(), data.data() + data.size());
 }
 
