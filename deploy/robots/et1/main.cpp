@@ -39,6 +39,7 @@ int main(int argc, char** argv)
 
     init_fsm_state();
 
+    FSMState::lowcmd->msg_.mode_machine() = 1; // ET1 29dof
     if (param::config["controller"]) {
         auto controller = param::config["controller"];
         if (controller["mode_pr"]) {
@@ -47,6 +48,10 @@ int main(int argc, char** argv)
         if (controller["mode_machine"]) {
             FSMState::lowcmd->msg_.mode_machine() = controller["mode_machine"].as<int>();
         }
+    }
+    if(!FSMState::lowcmd->check_mode_machine(FSMState::lowstate)) {
+        spdlog::critical("Unmatched robot type.");
+        exit(-1);
     }
 
     auto fsm = std::make_unique<CtrlFSM>(param::config["FSM"]);

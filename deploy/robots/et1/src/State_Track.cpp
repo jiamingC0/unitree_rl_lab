@@ -72,10 +72,14 @@ REGISTER_OBSERVATION(command_jnt_pos)
     const auto & data = State_Track::reference->command_joint_pos();
     const auto& joint_ids = env->robot->data.joint_ids_map;
     if (!joint_ids.empty() && joint_ids.size() != static_cast<size_t>(data.size())) {
+        const auto max_joint_id = *std::max_element(joint_ids.begin(), joint_ids.end());
+        if (max_joint_id >= data.size()) {
+            return std::vector<float>(data.data(), data.data() + data.size());
+        }
         std::vector<float> selected;
         selected.reserve(joint_ids.size());
         for (const auto joint_id : joint_ids) {
-            if (joint_id < 0 || joint_id >= data.size()) {
+            if (joint_id < 0) {
                 throw std::runtime_error("command_jnt_pos joint_ids_map index is out of range.");
             }
             selected.push_back(data[joint_id]);
@@ -136,6 +140,8 @@ State_Track::ReferenceLoader::ReferenceLoader(const std::filesystem::path& motio
     const auto cache_file = ensure_cache_file(motion_file);
     spdlog::info("Track: using cache file '{}'", cache_file.string());
     load_cache_file(cache_file);
+    joint_pos_ = Eigen::VectorXf::Zero(kJointDim);
+    joint_vel_ = Eigen::VectorXf::Zero(kJointDim);
     duration_ = frame_count_ > 0 ? static_cast<float>(frame_count_ - 1) / fps_ : 0.0f;
     spdlog::info("Track: reference loaded with {} frames, duration {:.3f}s", frame_count_, duration_);
 }
@@ -512,6 +518,25 @@ State_Track::State_Track(int state_mode, std::string state_string)
         spdlog::info("Track: per-frame observation dump enabled at '{}'", observation_dump_file_.string());
     }
 
+    if (cfg["head_hold_sdk_slots"]) {
+        head_hold_sdk_slots_ = cfg["head_hold_sdk_slots"].as<std::vector<int>>();
+        head_hold_q_ = cfg["head_hold_q"]
+            ? cfg["head_hold_q"].as<std::vector<float>>()
+            : std::vector<float>(head_hold_sdk_slots_.size(), 0.0f);
+        head_hold_kp_ = cfg["head_hold_kp"]
+            ? cfg["head_hold_kp"].as<std::vector<float>>()
+            : std::vector<float>(head_hold_sdk_slots_.size(), 0.0f);
+        head_hold_kd_ = cfg["head_hold_kd"]
+            ? cfg["head_hold_kd"].as<std::vector<float>>()
+            : std::vector<float>(head_hold_sdk_slots_.size(), 0.0f);
+        if (head_hold_q_.size() != head_hold_sdk_slots_.size()
+            || head_hold_kp_.size() != head_hold_sdk_slots_.size()
+            || head_hold_kd_.size() != head_hold_sdk_slots_.size()) {
+            throw std::runtime_error("Track: head hold config size mismatch.");
+        }
+        spdlog::info("Track: head hold enabled for {} sdk joints", head_hold_sdk_slots_.size());
+    }
+
     const std::string policy_file = cfg["policy_file"] ? cfg["policy_file"].as<std::string>() : "policy.onnx";
     const std::string deploy_file = cfg["deploy_file"] ? cfg["deploy_file"].as<std::string>() : "deploy.yaml";
     const auto policy_path = policy_dir / "exported" / policy_file;
@@ -563,6 +588,7 @@ void State_Track::enter()
     for (int i = 0; i < env->robot->data.joint_ids_map.size(); ++i) {
         lowcmd->msg_.motor_cmd()[env->robot->data.policy_joint_to_sdk_slot(i)].mode() = 1;
     }
+    apply_head_hold_command();
 
     reference = reference_;
     reference_->reset(env->robot->data.default_joint_pos);
@@ -663,6 +689,7 @@ void State_Track::run()
         motor.kd() = policy_kd_[i];
         motor.tau() = 0.0f;
     }
+    apply_head_hold_command();
 
     if (debug_dump_first_frame_ && !first_frame_debug_dumped_) {
         dump_first_frame_debug(obs, action, target_q);
@@ -674,6 +701,30 @@ void State_Track::exit()
 {
     spdlog::info("Track: exit");
     close_observation_dump();
+}
+
+void State_Track::apply_head_hold_command()
+{
+    if (head_hold_sdk_slots_.empty()) {
+        return;
+    }
+
+    const auto motor_count = lowcmd->msg_.motor_cmd().size();
+    for (size_t i = 0; i < head_hold_sdk_slots_.size(); ++i) {
+        const int sdk_slot = head_hold_sdk_slots_[i];
+        if (sdk_slot < 0 || static_cast<size_t>(sdk_slot) >= motor_count) {
+            spdlog::warn("Track: head hold sdk slot {} is out of range, skip", sdk_slot);
+            continue;
+        }
+
+        auto& motor = lowcmd->msg_.motor_cmd()[sdk_slot];
+        motor.mode() = 1;
+        motor.q() = head_hold_q_[i];
+        motor.dq() = 0.0f;
+        motor.kp() = head_hold_kp_[i];
+        motor.kd() = head_hold_kd_[i];
+        motor.tau() = 0.0f;
+    }
 }
 
 void State_Track::open_observation_dump()

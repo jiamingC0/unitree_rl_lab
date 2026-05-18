@@ -87,6 +87,17 @@ public:
 
     LowCmd(std::string topic = "rt/lowcmd") : RealTimePublisher<MsgType>(topic) {}
 
+    bool check_mode_machine(subscription::LowState::SharedPtr lowstate = nullptr) const
+    {
+        auto sub = lowstate == nullptr ? std::make_shared<subscription::LowState>() : lowstate;
+        sub->wait_for_connection();
+        auto m_sub = sub->msg_.mode_machine();
+        auto m_pub = msg_.mode_machine();
+
+        // 0 means simulation environment.
+        return !(m_sub != 0 && m_sub != m_pub);
+    }
+
 private:
     void pre_communication() override
     {

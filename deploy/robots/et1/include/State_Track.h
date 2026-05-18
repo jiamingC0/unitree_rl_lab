@@ -99,12 +99,17 @@ private:
     void open_observation_dump();
     void dump_observation_frame(const std::unordered_map<std::string, std::vector<float>>& obs);
     void close_observation_dump();
+    void apply_head_hold_command();
 
     std::unique_ptr<isaaclab::ManagerBasedRLEnv> env;
     std::shared_ptr<ReferenceLoader> reference_;
     std::vector<int> override_joint_ids_;  // Joints whose positions are overridden by reference motion
     std::vector<float> policy_kp_;
     std::vector<float> policy_kd_;
+    std::vector<int> head_hold_sdk_slots_;
+    std::vector<float> head_hold_q_;
+    std::vector<float> head_hold_kp_;
+    std::vector<float> head_hold_kd_;
     std::filesystem::path debug_dump_dir_;
     bool debug_dump_first_frame_ = false;
     bool first_frame_debug_dumped_ = false;

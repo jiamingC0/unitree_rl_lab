@@ -1,6 +1,6 @@
 controller:
   mode_pr: 0
-  mode_machine: 0
+  mode_machine: 1
 
 FSM:
   _:
@@ -197,7 +197,11 @@ FSM:
     motion_file: config/policy/dance/nohead_poker_face/params/poker_face.npz
     fps: 50
     no_global_mode: true
-    use_motion_root_command: false
+    use_motion_root_command: true
     use_motion_velocity_command: false
+    head_hold_sdk_slots: [29, 30]
+    head_hold_q: [0.0, 0.0]
+    head_hold_kp: [40.0, 10.0]
+    head_hold_kd: [2.0, 0.5]
     dump_observations: true
     observation_dump_file: debug/nohead_poker_face_observations.txt
