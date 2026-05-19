@@ -128,7 +128,7 @@ FSM:
     keyboard_transitions:
       Passive: "0"
       FixStand: "1"
-    xml_file: /home/galbot/WorkSpace/mjlab/src/mjlab/asset_zoo/robots/et1/xmls/galbot_ET1_0423_26_sdk_collision.xml
+    xml_file: galbot_ET1_0423_26_sdk_collision.xml
     # XML order: 0-13 legs/waist, 14-18 left arm, 19-23 right arm, 24-25 head.
     # SDK slots keep the full ET1 motor_cmd order used by FixStand.
     joint_sdk_slots: [
