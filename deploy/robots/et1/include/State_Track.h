@@ -104,7 +104,9 @@ private:
                           const std::string& descr,
                           const std::vector<size_t>& shape) const;
     void open_observation_dump();
-    void dump_observation_frame(const std::unordered_map<std::string, std::vector<float>>& obs);
+    void dump_control_frame(const std::unordered_map<std::string, std::vector<float>>& obs,
+                            const std::vector<float>& action,
+                            const std::vector<float>& target_q);
     void close_observation_dump();
     void apply_head_hold_command();
 
@@ -126,6 +128,7 @@ private:
     bool has_initial_yaw_bias_ = false;
     float initial_yaw_bias_ = 0.0f;
     bool observation_dump_enabled_ = false;
+    std::filesystem::path observation_dump_base_file_;
     std::filesystem::path observation_dump_file_;
     std::ofstream observation_dump_stream_;
     size_t observation_dump_frame_ = 0;

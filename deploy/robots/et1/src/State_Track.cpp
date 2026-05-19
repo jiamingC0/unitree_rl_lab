@@ -41,6 +41,26 @@ float quat_to_yaw(float qw, float qx, float qy, float qz)
     }
     return std::atan2(2.0f * (qw * qz + qx * qy), 1.0f - 2.0f * (qy * qy + qz * qz));
 }
+
+std::string timestamp_string()
+{
+    const auto now = std::chrono::system_clock::now();
+    const auto now_time = std::chrono::system_clock::to_time_t(now);
+    std::tm local_time{};
+    localtime_r(&now_time, &local_time);
+
+    std::ostringstream ss;
+    ss << std::put_time(&local_time, "%Y%m%d_%H%M%S");
+    return ss.str();
+}
+
+std::filesystem::path timestamped_dump_path(const std::filesystem::path& base_path)
+{
+    const auto dir = base_path.parent_path();
+    const auto stem = base_path.stem().string();
+    const auto ext = base_path.extension().string();
+    return dir / (stem + "_" + timestamp_string() + ext);
+}
 }
 
 namespace isaaclab
@@ -704,10 +724,10 @@ void State_Track::run()
 
     env->robot->update();
     const auto obs = env->observation_manager->compute();
-    dump_observation_frame(obs);
     const auto action = env->alg->act(obs);
     env->action_manager->process_action(action);
     auto target_q = env->action_manager->processed_actions();
+    dump_control_frame(obs, action, target_q);
     for (int i = 0; i < env->robot->data.joint_ids_map.size(); ++i) {
         const int sdk_slot = env->robot->data.policy_joint_to_sdk_slot(i);
 
@@ -765,6 +785,7 @@ void State_Track::open_observation_dump()
     }
 
     try {
+        observation_dump_file_ = timestamped_dump_path(observation_dump_base_file_);
         std::filesystem::create_directories(observation_dump_file_.parent_path());
         observation_dump_stream_.open(observation_dump_file_, std::ios::out | std::ios::trunc);
         if (!observation_dump_stream_) {
@@ -774,16 +795,18 @@ void State_Track::open_observation_dump()
         observation_dump_stream_ << "# ET1 Track observation dump\n";
         observation_dump_stream_ << "# state " << getStateString() << "\n";
         observation_dump_stream_ << "# dt " << env->step_dt << "\n";
-        observation_dump_stream_ << "# format: frame <index> episode_length <count> time_s <seconds>\n";
-        observation_dump_stream_ << "# then one line per observation group: obs <name> size <n> values <v0> ...\n";
-        spdlog::info("Track: writing per-frame observations to '{}'", observation_dump_file_.string());
+        observation_dump_stream_ << "# format: frame <dump_index> episode_length <count> time_s <seconds> reference_frame <index> reference_time_s <seconds>\n";
+        observation_dump_stream_ << "# lines per control frame: live_state, ref_command, obs groups, action raw_policy, action target_q\n";
+        spdlog::info("Track: writing per-frame control dump to '{}'", observation_dump_file_.string());
     } catch (const std::exception& e) {
         observation_dump_enabled_ = false;
         spdlog::error("Track: disabling observation dump: {}", e.what());
     }
 }
 
-void State_Track::dump_observation_frame(const std::unordered_map<std::string, std::vector<float>>& obs)
+void State_Track::dump_control_frame(const std::unordered_map<std::string, std::vector<float>>& obs,
+                                     const std::vector<float>& action,
+                                     const std::vector<float>& target_q)
 {
     if (!observation_dump_enabled_ || !observation_dump_stream_) {
         return;
@@ -796,10 +819,70 @@ void State_Track::dump_observation_frame(const std::unordered_map<std::string, s
     }
     std::sort(names.begin(), names.end());
 
+    const auto& live_state = env->robot->data.live_state;
+
     observation_dump_stream_ << "frame " << observation_dump_frame_
                              << " episode_length " << env->episode_length
                              << " time_s " << (env->episode_length * env->step_dt)
+                             << " reference_frame " << reference_->current_frame_index()
+                             << " reference_time_s " << reference_->current_time_s()
                              << "\n";
+
+    observation_dump_stream_ << "live_state root_quat_w"
+                             << " " << live_state.root_quat_w.w()
+                             << " " << live_state.root_quat_w.x()
+                             << " " << live_state.root_quat_w.y()
+                             << " " << live_state.root_quat_w.z()
+                             << " root_ang_vel_b"
+                             << " " << live_state.root_gyro_b.x()
+                             << " " << live_state.root_gyro_b.y()
+                             << " " << live_state.root_gyro_b.z()
+                             << " has_highstate " << (live_state.has_highstate ? 1 : 0)
+                             << " root_pos_w"
+                             << " " << live_state.root_pos_w.x()
+                             << " " << live_state.root_pos_w.y()
+                             << " " << live_state.root_pos_w.z()
+                             << " root_lin_vel_w"
+                             << " " << live_state.root_lin_vel_w.x()
+                             << " " << live_state.root_lin_vel_w.y()
+                             << " " << live_state.root_lin_vel_w.z()
+                             << "\n";
+
+    const auto& ref_root_ori_b = reference_->command_root_ori_b();
+    observation_dump_stream_ << "ref_command root_ori_b size " << ref_root_ori_b.size() << " values";
+    for (int i = 0; i < ref_root_ori_b.size(); ++i) {
+        observation_dump_stream_ << " " << ref_root_ori_b[i];
+    }
+    observation_dump_stream_ << "\n";
+
+    const auto& ref_xy_yaw_vel = reference_->command_xy_yaw_vel();
+    observation_dump_stream_ << "ref_command xy_yaw_vel size " << ref_xy_yaw_vel.size() << " values";
+    for (int i = 0; i < ref_xy_yaw_vel.size(); ++i) {
+        observation_dump_stream_ << " " << ref_xy_yaw_vel[i];
+    }
+    observation_dump_stream_ << "\n";
+
+    const auto& ref_joint_pos = reference_->command_joint_pos();
+    observation_dump_stream_ << "ref_command joint_pos size " << ref_joint_pos.size() << " values";
+    for (int i = 0; i < ref_joint_pos.size(); ++i) {
+        observation_dump_stream_ << " " << ref_joint_pos[i];
+    }
+    observation_dump_stream_ << "\n";
+
+    const auto& ref_joint_vel = reference_->command_joint_vel();
+    observation_dump_stream_ << "ref_command joint_vel size " << ref_joint_vel.size() << " values";
+    for (int i = 0; i < ref_joint_vel.size(); ++i) {
+        observation_dump_stream_ << " " << ref_joint_vel[i];
+    }
+    observation_dump_stream_ << "\n";
+
+    const auto& ref_foot_support = reference_->command_foot_support_state();
+    observation_dump_stream_ << "ref_command foot_support_state size " << ref_foot_support.size() << " values";
+    for (int i = 0; i < ref_foot_support.size(); ++i) {
+        observation_dump_stream_ << " " << ref_foot_support[i];
+    }
+    observation_dump_stream_ << "\n";
+
     for (const auto& name : names) {
         const auto& values = obs.at(name);
         observation_dump_stream_ << "obs " << name << " size " << values.size() << " values";
@@ -808,6 +891,19 @@ void State_Track::dump_observation_frame(const std::unordered_map<std::string, s
         }
         observation_dump_stream_ << "\n";
     }
+
+    observation_dump_stream_ << "action raw_policy size " << action.size() << " values";
+    for (float value : action) {
+        observation_dump_stream_ << " " << value;
+    }
+    observation_dump_stream_ << "\n";
+
+    observation_dump_stream_ << "action target_q size " << target_q.size() << " values";
+    for (float value : target_q) {
+        observation_dump_stream_ << " " << value;
+    }
+    observation_dump_stream_ << "\n";
+
     observation_dump_stream_ << "\n";
     observation_dump_stream_.flush();
     ++observation_dump_frame_;
