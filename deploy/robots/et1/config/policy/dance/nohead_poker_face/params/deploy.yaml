@@ -100,7 +100,7 @@ observations:
       history_length: 1
   obs_history:
     use_gym_history: true
-    command_root_ori_b:
+    command_root_ori_b_unbiased:
       params: {}
       clip: null
       scale: null

@@ -1,9 +1,11 @@
 #include "State_Track.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstring>
 #include <cstdlib>
+#include <ctime>
 #include <iomanip>
 #include <limits>
 #include <sstream>
@@ -52,6 +54,15 @@ REGISTER_OBSERVATION(command_root_ori_b)
         throw std::runtime_error("State_Track::reference is null while computing command_root_ori_b.");
     }
     const auto & data = State_Track::reference->command_root_ori_b();
+    return std::vector<float>(data.data(), data.data() + data.size());
+}
+
+REGISTER_OBSERVATION(command_root_ori_b_unbiased)
+{
+    if (!State_Track::reference) {
+        throw std::runtime_error("State_Track::reference is null while computing command_root_ori_b_unbiased.");
+    }
+    const auto & data = State_Track::reference->command_root_ori_b_unbiased();
     return std::vector<float>(data.data(), data.data() + data.size());
 }
 
@@ -151,7 +162,13 @@ void State_Track::ReferenceLoader::reset(const Eigen::VectorXf& default_joint_po
     default_joint_pos_ = default_joint_pos;
     joint_pos_ = Eigen::VectorXf::Zero(kJointDim);
     joint_vel_ = Eigen::VectorXf::Zero(kJointDim);
-    update(0.0f, false, false, Eigen::Vector2f::Zero(), 0.0f, Eigen::Quaternionf::Identity());
+    update(0.0f,
+           false,
+           false,
+           Eigen::Vector2f::Zero(),
+           0.0f,
+           Eigen::Quaternionf::Identity(),
+           Eigen::Quaternionf::Identity());
 }
 
 void State_Track::ReferenceLoader::update(float time_s,
@@ -160,6 +177,7 @@ void State_Track::ReferenceLoader::update(float time_s,
                                           const Eigen::Vector2f& current_root_xy,
                                           float current_root_yaw,
                                           const Eigen::Quaternionf& current_root_quat,
+                                          const Eigen::Quaternionf& current_root_quat_unbiased,
                                           bool use_motion_root_command,
                                           bool use_motion_velocity_command)
 {
@@ -170,6 +188,8 @@ void State_Track::ReferenceLoader::update(float time_s,
     // Loop the reference so tracking can run continuously in sim.
     const float loop_time = duration_ > 0.0f ? std::fmod(std::max(time_s, 0.0f), duration_) : 0.0f;
     const size_t frame_index = std::min(static_cast<size_t>(std::round(loop_time * fps_)), frame_count_ - 1);
+    current_frame_index_ = frame_index;
+    current_time_s_ = loop_time;
 
     const size_t joint_offset = frame_index * kJointDim;
     for (int i = 0; i < kJointDim; ++i) {
@@ -193,8 +213,16 @@ void State_Track::ReferenceLoader::update(float time_s,
         root_ori_b_ << root_rot_b(0, 0), root_rot_b(0, 1),
                        root_rot_b(1, 0), root_rot_b(1, 1),
                        root_rot_b(2, 0), root_rot_b(2, 1);
+
+        Eigen::Quaternionf robot_root_q_unbiased = current_root_quat_unbiased.normalized();
+        const Eigen::Matrix3f root_rot_b_unbiased =
+            (robot_root_q_unbiased.conjugate() * ref_root_q).toRotationMatrix();
+        root_ori_b_unbiased_ << root_rot_b_unbiased(0, 0), root_rot_b_unbiased(0, 1),
+                                root_rot_b_unbiased(1, 0), root_rot_b_unbiased(1, 1),
+                                root_rot_b_unbiased(2, 0), root_rot_b_unbiased(2, 1);
     } else {
         root_ori_b_ << 1.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f;
+        root_ori_b_unbiased_ << 1.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f;
     }
 
     const float yaw_ref = quat_to_yaw(ref_root_q.w(), ref_root_q.x(), ref_root_q.y(), ref_root_q.z());
@@ -508,12 +536,13 @@ State_Track::State_Track(int state_mode, std::string state_string)
     }
 
     observation_dump_enabled_ = cfg["dump_observations"].as<bool>(state_string == "Dance2");
-    observation_dump_file_ = cfg["observation_dump_file"]
+    observation_dump_base_file_ = cfg["observation_dump_file"]
         ? std::filesystem::path(cfg["observation_dump_file"].as<std::string>())
         : std::filesystem::path("debug/dance2_pokerface_observations.txt");
-    if (!observation_dump_file_.is_absolute()) {
-        observation_dump_file_ = param::proj_dir / observation_dump_file_;
+    if (!observation_dump_base_file_.is_absolute()) {
+        observation_dump_base_file_ = param::proj_dir / observation_dump_base_file_;
     }
+    observation_dump_file_ = observation_dump_base_file_;
     if (observation_dump_enabled_) {
         spdlog::info("Track: per-frame observation dump enabled at '{}'", observation_dump_file_.string());
     }
@@ -650,6 +679,7 @@ void State_Track::run()
                        current_root_xy,
                        current_root_yaw_used,
                        current_root_quat_used,
+                       live_state.root_quat_w,
                        use_motion_root_command_,
                        use_motion_velocity_command_);
     env->episode_length += 1;

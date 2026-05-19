@@ -37,14 +37,18 @@ public:
                     const Eigen::Vector2f& current_root_xy,
                     float current_root_yaw,
                     const Eigen::Quaternionf& current_root_quat,
+                    const Eigen::Quaternionf& current_root_quat_unbiased,
                     bool use_motion_root_command = true,
                     bool use_motion_velocity_command = true);
 
         const Eigen::VectorXf& command_joint_pos() const { return joint_pos_; }
         const Eigen::VectorXf& command_joint_vel() const { return joint_vel_; }
         const Eigen::Matrix<float, 6, 1>& command_root_ori_b() const { return root_ori_b_; }
+        const Eigen::Matrix<float, 6, 1>& command_root_ori_b_unbiased() const { return root_ori_b_unbiased_; }
         const Eigen::Vector3f& command_xy_yaw_vel() const { return xy_yaw_vel_; }
         const Eigen::Matrix<float, 6, 1>& command_foot_support_state() const { return foot_support_state_; }
+        size_t current_frame_index() const { return current_frame_index_; }
+        float current_time_s() const { return current_time_s_; }
         float duration() const { return duration_; }
 
     private:
@@ -67,9 +71,12 @@ public:
         Eigen::VectorXf joint_pos_;
         Eigen::VectorXf joint_vel_;
         Eigen::Matrix<float, 6, 1> root_ori_b_ = Eigen::Matrix<float, 6, 1>::Zero();
+        Eigen::Matrix<float, 6, 1> root_ori_b_unbiased_ = Eigen::Matrix<float, 6, 1>::Zero();
         Eigen::Vector3f xy_yaw_vel_ = Eigen::Vector3f::Zero();
         Eigen::Matrix<float, 6, 1> foot_support_state_ = Eigen::Matrix<float, 6, 1>::Zero();
         size_t frame_count_ = 0;
+        size_t current_frame_index_ = 0;
+        float current_time_s_ = 0.0f;
 
         float wrap_to_pi(float angle) const;
     };
