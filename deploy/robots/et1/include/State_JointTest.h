@@ -67,6 +67,7 @@ private:
     std::filesystem::path log_dir_;
     std::filesystem::path log_path_;
     std::ofstream log_stream_;
+    double log_start_time_ = 0.0;
 };
 
 REGISTER_FSM(State_JointTest)

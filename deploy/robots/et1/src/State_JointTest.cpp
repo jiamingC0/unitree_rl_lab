@@ -223,6 +223,8 @@ void State_JointTest::open_log()
         return;
     }
 
+    log_start_time_ = now_s();
+    log_stream_ << std::setprecision(9);
     log_stream_ << "time_s,round,joint_id,joint_name,sdk_slot,phase,"
                 << "q_cmd,q_actual,dq_actual,lower,upper\n";
     spdlog::info("JointTest: logging to '{}'", log_path_.string());
@@ -236,7 +238,7 @@ void State_JointTest::log_sample(float q_cmd)
 
     const auto& limit = joint_limits_[selected_joint_];
     const auto& motor_state = lowstate->msg_.motor_state()[selected_sdk_slot_];
-    log_stream_ << now_s() << ","
+    log_stream_ << (now_s() - log_start_time_) << ","
                 << round_ << ","
                 << (selected_joint_ + 1) << ","
                 << limit.name << ","
