@@ -77,6 +77,7 @@ public:
         size_t frame_count_ = 0;
         size_t current_frame_index_ = 0;
         float current_time_s_ = 0.0f;
+        float initial_ref_yaw_bias_ = 0.0f;
 
         float wrap_to_pi(float angle) const;
     };

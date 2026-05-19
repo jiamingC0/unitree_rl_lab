@@ -182,6 +182,15 @@ void State_Track::ReferenceLoader::reset(const Eigen::VectorXf& default_joint_po
     default_joint_pos_ = default_joint_pos;
     joint_pos_ = Eigen::VectorXf::Zero(kJointDim);
     joint_vel_ = Eigen::VectorXf::Zero(kJointDim);
+    initial_ref_yaw_bias_ = 0.0f;
+    if (frame_count_ > 0 && body_quat_w_seq_.size() >= 4) {
+        initial_ref_yaw_bias_ = quat_to_yaw(
+            body_quat_w_seq_[0],
+            body_quat_w_seq_[1],
+            body_quat_w_seq_[2],
+            body_quat_w_seq_[3]
+        );
+    }
     update(0.0f,
            false,
            false,
@@ -226,6 +235,14 @@ void State_Track::ReferenceLoader::update(float time_s,
         body_quat_w_seq_[root_quat_offset + 3]
     );
     ref_root_q.normalize();
+    Eigen::Quaternionf ref_world_align_q = Eigen::Quaternionf::Identity();
+    if (no_global_mode) {
+        const Eigen::Quaternionf initial_ref_yaw_q(
+            Eigen::AngleAxisf(initial_ref_yaw_bias_, Eigen::Vector3f::UnitZ())
+        );
+        ref_world_align_q = initial_ref_yaw_q.conjugate();
+        ref_root_q = (ref_world_align_q * ref_root_q).normalized();
+    }
 
     if (use_motion_root_command) {
         Eigen::Quaternionf robot_root_q = current_root_quat.normalized();
@@ -250,16 +267,18 @@ void State_Track::ReferenceLoader::update(float time_s,
         Eigen::AngleAxisf(yaw_ref, Eigen::Vector3f::UnitZ()) * Eigen::Quaternionf::Identity();
     const size_t root_lin_vel_offset = root_body_offset * 3;
     const size_t root_ang_vel_offset = root_body_offset * 3;
-    const Eigen::Vector3f ref_lin_vel_w(
+    const Eigen::Vector3f ref_lin_vel_w_raw(
         body_lin_vel_w_seq_[root_lin_vel_offset + 0],
         body_lin_vel_w_seq_[root_lin_vel_offset + 1],
         body_lin_vel_w_seq_[root_lin_vel_offset + 2]
     );
-    const Eigen::Vector3f ref_ang_vel_w(
+    const Eigen::Vector3f ref_ang_vel_w_raw(
         body_ang_vel_w_seq_[root_ang_vel_offset + 0],
         body_ang_vel_w_seq_[root_ang_vel_offset + 1],
         body_ang_vel_w_seq_[root_ang_vel_offset + 2]
     );
+    const Eigen::Vector3f ref_lin_vel_w = ref_world_align_q * ref_lin_vel_w_raw;
+    const Eigen::Vector3f ref_ang_vel_w = ref_world_align_q * ref_ang_vel_w_raw;
     if (use_motion_velocity_command) {
         const Eigen::Vector3f ref_lin_vel_navi = ref_yaw_q.conjugate() * ref_lin_vel_w;
         const Eigen::Vector3f ref_ang_vel_navi = ref_yaw_q.conjugate() * ref_ang_vel_w;
@@ -693,13 +712,15 @@ void State_Track::run()
         );
         current_root_quat_used = (yaw_bias_q.conjugate() * live_state.root_quat_w).normalized();
     }
+    const Eigen::Quaternionf current_root_quat_unbiased_used =
+        (no_global_mode_ && has_initial_yaw_bias_) ? current_root_quat_used : live_state.root_quat_w;
     reference_->update((env->episode_length + 1) * env->step_dt,
                        no_global_mode_,
                        has_current_root_xy,
                        current_root_xy,
                        current_root_yaw_used,
                        current_root_quat_used,
-                       live_state.root_quat_w,
+                       current_root_quat_unbiased_used,
                        use_motion_root_command_,
                        use_motion_velocity_command_);
     env->episode_length += 1;
