@@ -11,6 +11,9 @@ FSM:
     Velocity:
       id: 3
       type: Velocity
+    JointTest:
+      id: 7
+      type: JointTest
     GeneralTracker:
       id: 4
       type: Track
@@ -61,6 +64,7 @@ FSM:
     keyboard_transitions:
       Passive: "0"
       Velocity: "2"
+      JointTest: "7"
     kp: [
       80,80,80,80,40,40,
       80,80,80,80,40,40,
@@ -116,6 +120,53 @@ FSM:
       Dance2: "5"
       NoHeadPokerFace: "6"
     policy_dir: config/policy/velocity/v0
+
+  JointTest:
+    transitions:
+      Passive: LT + B.on_pressed
+      FixStand: RB + X.on_pressed
+    keyboard_transitions:
+      Passive: "0"
+      FixStand: "1"
+    xml_file: /home/galbot/WorkSpace/mjlab/src/mjlab/asset_zoo/robots/et1/xmls/galbot_ET1_0423_26_sdk_collision.xml
+    # XML order: 0-13 legs/waist, 14-18 left arm, 19-23 right arm, 24-25 head.
+    # SDK slots keep the full ET1 motor_cmd order used by FixStand.
+    joint_sdk_slots: [
+      0,1,2,3,4,5,
+      6,7,8,9,10,11,
+      12,13,
+      15,16,17,18,19,
+      22,23,24,25,26,
+      29,30
+    ]
+    kp: [
+      80,80,80,80,40,40,
+      80,80,80,80,40,40,
+      80,80,
+      0,
+      60,60,40,40,40,
+      0,0,
+      60,60,40,40,40,
+      0,0,
+      40,10,
+      0,0
+    ]
+    kd: [
+      5,5,5,5,3,3,
+      5,5,5,5,3,3,
+      5,5,
+      0,
+      4,4,3,3,3,
+      0,0,
+      4,4,3,3,3,
+      0,0,
+      3,0.1,
+      0,0
+    ]
+    ramp_speed: 0.2
+    hold_upper_s: 2.0
+    hold_lower_s: 2.0
+    log_dir: debug/joint_test
 
   GeneralTracker:
     transitions:
