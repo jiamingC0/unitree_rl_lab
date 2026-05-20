@@ -30,12 +30,10 @@ private:
         Idle,
         ToZero,
         HoldZero,
-        StepUpper,
-        HoldUpper,
-        StepLower,
-        HoldLower,
+        StepTarget,
+        HoldTarget,
         StepZero,
-        HoldFinalZero,
+        HoldStepZero,
     };
 
     std::filesystem::path resolve_xml_path(const std::string& configured_path) const;
@@ -43,6 +41,8 @@ private:
     int ask_joint_index() const;
     float ramp(float from, float to, double elapsed_s) const;
     const char* phase_name(Phase phase) const;
+    std::vector<float> build_target_sequence(const JointLimit& limit) const;
+    float target_hold_duration() const;
     std::filesystem::path make_log_path() const;
     void open_log();
     void log_sample(float q_cmd);
@@ -62,6 +62,8 @@ private:
     double phase_start_time_ = 0.0;
     float phase_start_q_ = 0.0f;
     float phase_target_q_ = 0.0f;
+    int target_index_ = 0;
+    std::vector<float> target_sequence_;
     float return_speed_ = 0.2f;
     float zero_hold_s_ = 1.0f;
     float hold_upper_s_ = 2.0f;

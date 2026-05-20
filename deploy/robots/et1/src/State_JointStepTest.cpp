@@ -1,5 +1,6 @@
 #include "State_JointStepTest.h"
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <ctime>
@@ -9,6 +10,7 @@
 #include <regex>
 #include <sstream>
 #include <stdexcept>
+#include <system_error>
 #include <unordered_map>
 
 #include <spdlog/spdlog.h>
@@ -196,56 +198,122 @@ const char* State_JointStepTest::phase_name(Phase phase) const
     case Phase::Idle: return "idle";
     case Phase::ToZero: return "to_zero";
     case Phase::HoldZero: return "hold_zero";
-    case Phase::StepUpper: return "step_upper";
-    case Phase::HoldUpper: return "hold_upper";
-    case Phase::StepLower: return "step_lower";
-    case Phase::HoldLower: return "hold_lower";
+    case Phase::StepTarget: return "step_target";
+    case Phase::HoldTarget: return "hold_target";
     case Phase::StepZero: return "step_zero";
-    case Phase::HoldFinalZero: return "hold_final_zero";
+    case Phase::HoldStepZero: return "hold_step_zero";
     }
     return "unknown";
 }
 
+std::vector<float> State_JointStepTest::build_target_sequence(const JointLimit& limit) const
+{
+    const auto clamp = [&](float q) {
+        return std::clamp(q, limit.lower, limit.upper);
+    };
+
+    const std::string& name = limit.name;
+    std::vector<float> targets;
+    if (name.find("_hip_") != std::string::npos) {
+        targets = {0.5f, 0.0f, 1.0f, -0.5f, 0.0f};
+    } else if (name.find("_knee_joint") != std::string::npos) {
+        targets = {0.5f, 0.0f, 1.0f, 0.5f, 0.0f};
+    } else if (name.find("_ankle_pitch_joint") != std::string::npos) {
+        targets = {-0.4f, 0.0f, 0.3f, 0.0f};
+    } else if (name.find("_ankle_roll_joint") != std::string::npos) {
+        targets = {-0.1f, 0.0f, 0.1f, 0.0f};
+    } else if (name == "waist_roll_joint") {
+        targets = {-0.2f, 0.0f, 0.3f, 0.0f};
+    } else if (name == "waist_yaw_joint") {
+        targets = {-0.3f, 0.0f, 0.4f, 0.0f};
+    } else if (name.find("_shoulder_pitch_joint") != std::string::npos) {
+        targets = {-0.5f, 0.0f, 0.5f, 0.0f};
+    } else if (name.find("_shoulder_roll_joint") != std::string::npos) {
+        targets = {-0.3f, 0.0f, 0.3f, 0.0f};
+    } else if (name.find("_shoulder_yaw_joint") != std::string::npos) {
+        targets = {-0.4f, 0.0f, 0.4f, 0.0f};
+    } else if (name.find("_elbow_joint") != std::string::npos) {
+        targets = {0.5f, 0.0f, 1.0f, 0.5f, 0.0f};
+    } else if (name.find("_wrist_roll_joint") != std::string::npos) {
+        targets = {-0.4f, 0.0f, 0.4f, 0.0f};
+    } else if (name.find("head_") == 0) {
+        targets = {-0.2f, 0.0f, 0.2f, 0.0f};
+    } else {
+        targets = {-0.3f, 0.0f, 0.3f, 0.0f};
+    }
+
+    for (float& target : targets) {
+        target = clamp(target);
+    }
+    return targets;
+}
+
+float State_JointStepTest::target_hold_duration() const
+{
+    if (target_sequence_.empty() || target_index_ < 0 ||
+        target_index_ >= static_cast<int>(target_sequence_.size())) {
+        return hold_final_zero_s_;
+    }
+
+    const bool is_zero_target = std::fabs(target_sequence_[target_index_]) < 1e-6f;
+    const bool is_final_target = target_index_ + 1 >= static_cast<int>(target_sequence_.size());
+    if (is_final_target) {
+        return hold_final_zero_s_;
+    }
+    return is_zero_target ? zero_hold_s_ : hold_upper_s_;
+}
+
 std::filesystem::path State_JointStepTest::make_log_path() const
 {
-    const std::string joint_name = selected_joint_ >= 0 ? joint_limits_[selected_joint_].name : "unknown";
-    return log_dir_ / ("joint_step_test_" + timestamp_string() + "_" + joint_name + ".csv");
+    return log_dir_ / ("joint_step_test_" + timestamp_string() + ".csv");
 }
 
 void State_JointStepTest::open_log()
 {
-    if (log_stream_) {
+    if (log_stream_.is_open()) {
         return;
     }
-    std::filesystem::create_directories(log_dir_);
+    std::error_code ec;
+    std::filesystem::create_directories(log_dir_, ec);
+    if (ec) {
+        throw std::runtime_error(
+            "JointStepTest: failed to create CSV log dir '" + log_dir_.string() +
+            "': " + ec.message());
+    }
     log_path_ = make_log_path();
     log_stream_.open(log_path_);
     if (!log_stream_) {
-        spdlog::warn("JointStepTest: failed to open log file '{}'", log_path_.string());
-        return;
+        throw std::runtime_error("JointStepTest: failed to open CSV log file '" + log_path_.string() + "'");
     }
 
     log_start_time_ = now_s();
     log_stream_ << std::setprecision(9);
     log_stream_ << "time_s,round,joint_id,joint_name,sdk_slot,phase,"
+                << "target_index,target_q,target_count,"
                 << "q_cmd,q_actual,dq_actual,lower,upper\n";
-    spdlog::info("JointStepTest: logging to '{}'", log_path_.string());
 }
 
 void State_JointStepTest::log_sample(float q_cmd)
 {
-    if (!log_stream_ || selected_joint_ < 0 || selected_sdk_slot_ < 0) {
+    if (!log_stream_.is_open() || selected_joint_ < 0 || selected_sdk_slot_ < 0) {
         return;
     }
 
     const auto& limit = joint_limits_[selected_joint_];
     const auto& motor_state = lowstate->msg_.motor_state()[selected_sdk_slot_];
+    const int csv_target_index = target_index_ + 1;
+    const float target_q = (target_index_ >= 0 && target_index_ < static_cast<int>(target_sequence_.size()))
+        ? target_sequence_[target_index_]
+        : q_cmd;
     log_stream_ << (now_s() - log_start_time_) << ","
                 << round_ << ","
                 << (selected_joint_ + 1) << ","
                 << limit.name << ","
                 << selected_sdk_slot_ << ","
                 << phase_name(phase_) << ","
+                << csv_target_index << ","
+                << target_q << ","
+                << target_sequence_.size() << ","
                 << q_cmd << ","
                 << motor_state.q() << ","
                 << motor_state.dq() << ","
@@ -255,7 +323,7 @@ void State_JointStepTest::log_sample(float q_cmd)
 
 void State_JointStepTest::close_log()
 {
-    if (log_stream_) {
+    if (log_stream_.is_open()) {
         log_stream_.flush();
         log_stream_.close();
         spdlog::info("JointStepTest: closed log '{}'", log_path_.string());
@@ -268,6 +336,7 @@ void State_JointStepTest::select_next_joint_after_zero()
     if (selected_joint_ < 0) {
         selected_sdk_slot_ = -1;
         phase_ = Phase::Idle;
+        close_log();
         spdlog::info("JointStepTest: cancelled after returning to zero, holding current posture.");
         return;
     }
@@ -284,9 +353,12 @@ void State_JointStepTest::select_next_joint_after_zero()
     phase_start_time_ = now_s();
     phase_start_q_ = hold_q_[selected_sdk_slot_];
     phase_target_q_ = 0.0f;
-    spdlog::info("JointStepTest: selected joint {} '{}' sdk_slot {} range [{:.4f}, {:.4f}]",
+    target_index_ = 0;
+    target_sequence_ = build_target_sequence(limit);
+    open_log();
+    spdlog::info("JointStepTest: selected joint {} '{}' sdk_slot {} range [{:.4f}, {:.4f}], targets {}, csv '{}'",
                  selected_joint_ + 1, limit.name, selected_sdk_slot_,
-                 limit.lower, limit.upper);
+                 limit.lower, limit.upper, target_sequence_.size(), log_path_.string());
 }
 
 void State_JointStepTest::enter()
@@ -330,12 +402,14 @@ void State_JointStepTest::enter()
     phase_start_time_ = now_s();
     phase_start_q_ = hold_q_[selected_sdk_slot_];
     phase_target_q_ = 0.0f;
+    target_index_ = 0;
+    target_sequence_ = build_target_sequence(limit);
     round_ = 0;
     open_log();
 
-    spdlog::info("JointStepTest: selected joint {} '{}' sdk_slot {} range [{:.4f}, {:.4f}]",
+    spdlog::info("JointStepTest: selected joint {} '{}' sdk_slot {} range [{:.4f}, {:.4f}], targets {}, csv '{}'",
                  selected_joint_ + 1, limit.name, selected_sdk_slot_,
-                 limit.lower, limit.upper);
+                 limit.lower, limit.upper, target_sequence_.size(), log_path_.string());
 }
 
 void State_JointStepTest::run()
@@ -367,7 +441,6 @@ void State_JointStepTest::run()
         last_reported_phase_ = phase_;
     }
 
-    const auto& limit = joint_limits_[selected_joint_];
     const double elapsed = now_s() - phase_start_time_;
     float q = hold_q_[selected_sdk_slot_];
 
@@ -381,39 +454,48 @@ void State_JointStepTest::run()
     } else if (phase_ == Phase::HoldZero) {
         q = 0.0f;
         if (elapsed >= zero_hold_s_) {
-            phase_ = Phase::StepUpper;
+            phase_ = Phase::StepTarget;
         }
-    } else if (phase_ == Phase::StepUpper) {
-        q = limit.upper;
-        ++round_;
-        phase_ = Phase::HoldUpper;
-        phase_start_time_ = now_s();
-    } else if (phase_ == Phase::HoldUpper) {
-        q = limit.upper;
-        if (elapsed >= hold_upper_s_) {
-            phase_ = Phase::StepLower;
+    } else if (phase_ == Phase::StepTarget) {
+        if (target_sequence_.empty() || target_index_ >= static_cast<int>(target_sequence_.size())) {
+            select_next_joint_after_zero();
+            return;
         }
-    } else if (phase_ == Phase::StepLower) {
-        q = limit.lower;
-        phase_ = Phase::HoldLower;
+        q = target_sequence_[target_index_];
+        round_ = target_index_ + 1;
+        phase_ = Phase::HoldTarget;
         phase_start_time_ = now_s();
-    } else if (phase_ == Phase::HoldLower) {
-        q = limit.lower;
-        if (elapsed >= hold_lower_s_) {
-            phase_ = Phase::StepZero;
+    } else if (phase_ == Phase::HoldTarget) {
+        q = target_sequence_[target_index_];
+        if (elapsed >= target_hold_duration()) {
+            if (target_index_ + 1 >= static_cast<int>(target_sequence_.size())) {
+                hold_q_[selected_sdk_slot_] = q;
+                lowcmd->msg_.motor_cmd()[selected_sdk_slot_].q() = q;
+                log_sample(q);
+                select_next_joint_after_zero();
+                return;
+            }
+            ++target_index_;
+            phase_ = Phase::StepTarget;
         }
     } else if (phase_ == Phase::StepZero) {
         q = 0.0f;
-        phase_ = Phase::HoldFinalZero;
+        phase_ = Phase::HoldStepZero;
         phase_start_time_ = now_s();
-    } else if (phase_ == Phase::HoldFinalZero) {
+    } else if (phase_ == Phase::HoldStepZero) {
         q = 0.0f;
-        if (elapsed >= hold_final_zero_s_) {
-            hold_q_[selected_sdk_slot_] = 0.0f;
-            lowcmd->msg_.motor_cmd()[selected_sdk_slot_].q() = 0.0f;
-            log_sample(0.0f);
-            select_next_joint_after_zero();
-            return;
+        const bool final_target = target_index_ >= 2;
+        const float hold_s = final_target ? hold_final_zero_s_ : zero_hold_s_;
+        if (elapsed >= hold_s) {
+            if (final_target) {
+                hold_q_[selected_sdk_slot_] = 0.0f;
+                lowcmd->msg_.motor_cmd()[selected_sdk_slot_].q() = 0.0f;
+                log_sample(0.0f);
+                select_next_joint_after_zero();
+                return;
+            }
+            ++target_index_;
+            phase_ = Phase::StepTarget;
         }
     }
 
