@@ -14,6 +14,9 @@ FSM:
     JointTest:
       id: 7
       type: JointTest
+    JointStepTest:
+      id: 8
+      type: JointStepTest
     GeneralTracker:
       id: 4
       type: Track
@@ -65,6 +68,7 @@ FSM:
       Passive: "0"
       Velocity: "2"
       JointTest: "7"
+      JointStepTest: "8"
     kp: [
       80,80,80,80,40,40,
       80,80,80,80,40,40,
@@ -168,6 +172,55 @@ FSM:
     hold_lower_s: 2.0
     log_dir: debug/joint_test
 
+  JointStepTest:
+    transitions:
+      Passive: LT + B.on_pressed
+      FixStand: RB + X.on_pressed
+    keyboard_transitions:
+      Passive: "0"
+      FixStand: "1"
+    xml_file: galbot_ET1_0423_26_sdk_collision.xml
+    # XML order: 0-13 legs/waist, 14-18 left arm, 19-23 right arm, 24-25 head.
+    # SDK slots keep the full ET1 motor_cmd order used by FixStand.
+    joint_sdk_slots: [
+      0,1,2,3,4,5,
+      6,7,8,9,10,11,
+      12,13,
+      15,16,17,18,19,
+      22,23,24,25,26,
+      29,30
+    ]
+    kp: [
+      80,80,80,80,40,40,
+      80,80,80,80,40,40,
+      80,80,
+      0,
+      60,60,40,40,40,
+      0,0,
+      60,60,40,40,40,
+      0,0,
+      40,10,
+      0,0
+    ]
+    kd: [
+      5,5,5,5,3,3,
+      5,5,5,5,3,3,
+      5,5,
+      0,
+      4,4,3,3,3,
+      0,0,
+      4,4,3,3,3,
+      0,0,
+      3,0.1,
+      0,0
+    ]
+    return_speed: 0.2
+    zero_hold_s: 1.0
+    hold_upper_s: 2.0
+    hold_lower_s: 2.0
+    hold_final_zero_s: 2.0
+    log_dir: debug/joint_step_test
+
   GeneralTracker:
     transitions:
       Passive: LT + B.on_pressed
@@ -243,7 +296,7 @@ FSM:
       Dance1: "4"
       Dance2: "5"
     policy_dir: config/policy/dance/nohead_poker_face
-    policy_file: policy.onnx
+    policy_file: policy_joint_noise.onnx
     deploy_file: deploy.yaml
     motion_file: config/policy/dance/nohead_poker_face/params/poker_face.et1trk
     fps: 50

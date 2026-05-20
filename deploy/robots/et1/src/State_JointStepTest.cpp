@@ -1,0 +1,431 @@
+#include "State_JointStepTest.h"
+
+#include <chrono>
+#include <cmath>
+#include <ctime>
+#include <fstream>
+#include <iomanip>
+#include <iostream>
+#include <regex>
+#include <sstream>
+#include <stdexcept>
+#include <unordered_map>
+
+#include <spdlog/spdlog.h>
+#include <unitree/common/time/time_tool.hpp>
+
+namespace
+{
+double now_s()
+{
+    return static_cast<double>(unitree::common::GetCurrentTimeMillisecond()) * 1e-3;
+}
+
+std::string timestamp_string()
+{
+    const auto now = std::chrono::system_clock::now();
+    const auto now_time = std::chrono::system_clock::to_time_t(now);
+    std::tm local_time{};
+    localtime_r(&now_time, &local_time);
+
+    std::ostringstream ss;
+    ss << std::put_time(&local_time, "%Y%m%d_%H%M%S");
+    return ss.str();
+}
+
+template <typename T>
+std::vector<T> yaml_vector_or(const YAML::Node& node, const std::vector<T>& fallback)
+{
+    return node ? node.as<std::vector<T>>() : fallback;
+}
+}
+
+State_JointStepTest::State_JointStepTest(int state_mode, std::string state_string)
+    : FSMState(state_mode, state_string)
+{
+    auto cfg = param::config["FSM"][state_string];
+    if (!cfg) {
+        throw std::runtime_error("JointStepTest: missing FSM config.");
+    }
+
+    const std::string xml_file = cfg["xml_file"] ? cfg["xml_file"].as<std::string>() : "";
+    const auto xml_path = resolve_xml_path(xml_file);
+    joint_limits_ = load_joint_limits(xml_path);
+
+    joint_sdk_slots_ = cfg["joint_sdk_slots"]
+        ? cfg["joint_sdk_slots"].as<std::vector<int>>()
+        : std::vector<int>{0, 1, 2, 3, 4, 5,
+                           6, 7, 8, 9, 10, 11,
+                           12, 13,
+                           15, 16, 17, 18, 19,
+                           22, 23, 24, 25, 26,
+                           29, 30};
+    if (joint_limits_.size() < joint_sdk_slots_.size()) {
+        throw std::runtime_error("JointStepTest: XML has fewer ranged joints than joint_sdk_slots.");
+    }
+    if (joint_sdk_slots_.size() != 26) {
+        throw std::runtime_error("JointStepTest: expected exactly 26 joint SDK slots.");
+    }
+
+    kp_ = yaml_vector_or<float>(cfg["kp"], param::config["FSM"]["FixStand"]["kp"].as<std::vector<float>>());
+    kd_ = yaml_vector_or<float>(cfg["kd"], param::config["FSM"]["FixStand"]["kd"].as<std::vector<float>>());
+    return_speed_ = cfg["return_speed"] ? cfg["return_speed"].as<float>() : 0.2f;
+    zero_hold_s_ = cfg["zero_hold_s"] ? cfg["zero_hold_s"].as<float>() : 1.0f;
+    hold_upper_s_ = cfg["hold_upper_s"] ? cfg["hold_upper_s"].as<float>() : 2.0f;
+    hold_lower_s_ = cfg["hold_lower_s"] ? cfg["hold_lower_s"].as<float>() : 2.0f;
+    hold_final_zero_s_ = cfg["hold_final_zero_s"] ? cfg["hold_final_zero_s"].as<float>() : 2.0f;
+    log_dir_ = cfg["log_dir"]
+        ? std::filesystem::path(cfg["log_dir"].as<std::string>())
+        : std::filesystem::path("debug/joint_step_test");
+    if (log_dir_.is_relative()) {
+        log_dir_ = param::proj_dir / log_dir_;
+    }
+
+    if (return_speed_ <= 0.0f) {
+        throw std::runtime_error("JointStepTest: return_speed must be positive.");
+    }
+
+    spdlog::info("JointStepTest: loaded {} joint limits from '{}'",
+                 joint_limits_.size(), xml_path.string());
+}
+
+std::filesystem::path State_JointStepTest::resolve_xml_path(const std::string& configured_path) const
+{
+    if (configured_path.empty()) {
+        throw std::runtime_error("JointStepTest: xml_file is required.");
+    }
+
+    std::filesystem::path path(configured_path);
+    if (path.is_absolute() && std::filesystem::exists(path)) {
+        return path;
+    }
+
+    std::vector<std::filesystem::path> candidates = {
+        param::proj_dir / path,
+        param::config_dir / path,
+        path,
+    };
+    for (const auto& candidate : candidates) {
+        if (std::filesystem::exists(candidate)) {
+            return candidate;
+        }
+    }
+
+    throw std::runtime_error("JointStepTest: XML file not found: " + configured_path);
+}
+
+std::vector<State_JointStepTest::JointLimit> State_JointStepTest::load_joint_limits(
+    const std::filesystem::path& xml_path) const
+{
+    std::ifstream in(xml_path);
+    if (!in) {
+        throw std::runtime_error("JointStepTest: failed to open XML file: " + xml_path.string());
+    }
+
+    std::vector<JointLimit> limits;
+    std::string line;
+    const std::regex attr_re(R"xmlattr(([A-Za-z_][A-Za-z0-9_]*)="([^"]*)")xmlattr");
+    while (std::getline(in, line)) {
+        if (line.find("<joint") == std::string::npos || line.find("range=") == std::string::npos) {
+            continue;
+        }
+
+        std::unordered_map<std::string, std::string> attrs;
+        for (std::sregex_iterator it(line.begin(), line.end(), attr_re), end; it != end; ++it) {
+            attrs[(*it)[1].str()] = (*it)[2].str();
+        }
+
+        const auto name_it = attrs.find("name");
+        const auto range_it = attrs.find("range");
+        if (name_it == attrs.end() || range_it == attrs.end()) {
+            continue;
+        }
+
+        std::istringstream range_stream(range_it->second);
+        JointLimit limit;
+        limit.name = name_it->second;
+        if (range_stream >> limit.lower >> limit.upper) {
+            limits.push_back(limit);
+        }
+    }
+
+    if (limits.empty()) {
+        throw std::runtime_error("JointStepTest: no ranged joints found in XML.");
+    }
+    return limits;
+}
+
+int State_JointStepTest::ask_joint_index() const
+{
+    while (true) {
+        std::cout << "\nJointStepTest: input joint id [1-26], or 0 to cancel:\n";
+        for (size_t i = 0; i < joint_sdk_slots_.size(); ++i) {
+            std::cout << "  " << (i + 1) << ": " << joint_limits_[i].name
+                      << "  range [" << joint_limits_[i].lower << ", "
+                      << joint_limits_[i].upper << "]  sdk_slot "
+                      << joint_sdk_slots_[i] << "\n";
+        }
+        const std::string input = keyboard ? keyboard->getString("JointStepTest> ") : "";
+        try {
+            const int value = std::stoi(input);
+            if (value == 0) {
+                return -1;
+            }
+            if (value >= 1 && value <= static_cast<int>(joint_sdk_slots_.size())) {
+                return value - 1;
+            }
+        } catch (const std::exception&) {
+        }
+        std::cout << "JointStepTest: invalid input '" << input << "'.\n";
+    }
+}
+
+float State_JointStepTest::ramp(float from, float to, double elapsed_s) const
+{
+    const float distance = to - from;
+    const float duration = std::fabs(distance) / return_speed_;
+    if (duration <= 1e-6f || elapsed_s >= duration) {
+        return to;
+    }
+    return from + distance * static_cast<float>(elapsed_s / duration);
+}
+
+const char* State_JointStepTest::phase_name(Phase phase) const
+{
+    switch (phase) {
+    case Phase::Idle: return "idle";
+    case Phase::ToZero: return "to_zero";
+    case Phase::HoldZero: return "hold_zero";
+    case Phase::StepUpper: return "step_upper";
+    case Phase::HoldUpper: return "hold_upper";
+    case Phase::StepLower: return "step_lower";
+    case Phase::HoldLower: return "hold_lower";
+    case Phase::StepZero: return "step_zero";
+    case Phase::HoldFinalZero: return "hold_final_zero";
+    }
+    return "unknown";
+}
+
+std::filesystem::path State_JointStepTest::make_log_path() const
+{
+    const std::string joint_name = selected_joint_ >= 0 ? joint_limits_[selected_joint_].name : "unknown";
+    return log_dir_ / ("joint_step_test_" + timestamp_string() + "_" + joint_name + ".csv");
+}
+
+void State_JointStepTest::open_log()
+{
+    if (log_stream_) {
+        return;
+    }
+    std::filesystem::create_directories(log_dir_);
+    log_path_ = make_log_path();
+    log_stream_.open(log_path_);
+    if (!log_stream_) {
+        spdlog::warn("JointStepTest: failed to open log file '{}'", log_path_.string());
+        return;
+    }
+
+    log_start_time_ = now_s();
+    log_stream_ << std::setprecision(9);
+    log_stream_ << "time_s,round,joint_id,joint_name,sdk_slot,phase,"
+                << "q_cmd,q_actual,dq_actual,lower,upper\n";
+    spdlog::info("JointStepTest: logging to '{}'", log_path_.string());
+}
+
+void State_JointStepTest::log_sample(float q_cmd)
+{
+    if (!log_stream_ || selected_joint_ < 0 || selected_sdk_slot_ < 0) {
+        return;
+    }
+
+    const auto& limit = joint_limits_[selected_joint_];
+    const auto& motor_state = lowstate->msg_.motor_state()[selected_sdk_slot_];
+    log_stream_ << (now_s() - log_start_time_) << ","
+                << round_ << ","
+                << (selected_joint_ + 1) << ","
+                << limit.name << ","
+                << selected_sdk_slot_ << ","
+                << phase_name(phase_) << ","
+                << q_cmd << ","
+                << motor_state.q() << ","
+                << motor_state.dq() << ","
+                << limit.lower << ","
+                << limit.upper << "\n";
+}
+
+void State_JointStepTest::close_log()
+{
+    if (log_stream_) {
+        log_stream_.flush();
+        log_stream_.close();
+        spdlog::info("JointStepTest: closed log '{}'", log_path_.string());
+    }
+}
+
+void State_JointStepTest::select_next_joint_after_zero()
+{
+    selected_joint_ = ask_joint_index();
+    if (selected_joint_ < 0) {
+        selected_sdk_slot_ = -1;
+        phase_ = Phase::Idle;
+        spdlog::info("JointStepTest: cancelled after returning to zero, holding current posture.");
+        return;
+    }
+
+    selected_sdk_slot_ = joint_sdk_slots_[selected_joint_];
+    if (selected_sdk_slot_ < 0 ||
+        selected_sdk_slot_ >= static_cast<int>(lowcmd->msg_.motor_cmd().size())) {
+        throw std::runtime_error("JointStepTest: selected SDK slot is out of motor_cmd range.");
+    }
+
+    const auto& limit = joint_limits_[selected_joint_];
+    phase_ = Phase::ToZero;
+    last_reported_phase_ = Phase::Idle;
+    phase_start_time_ = now_s();
+    phase_start_q_ = hold_q_[selected_sdk_slot_];
+    phase_target_q_ = 0.0f;
+    spdlog::info("JointStepTest: selected joint {} '{}' sdk_slot {} range [{:.4f}, {:.4f}]",
+                 selected_joint_ + 1, limit.name, selected_sdk_slot_,
+                 limit.lower, limit.upper);
+}
+
+void State_JointStepTest::enter()
+{
+    hold_q_.assign(lowcmd->msg_.motor_cmd().size(), 0.0f);
+    for (size_t i = 0; i < hold_q_.size(); ++i) {
+        hold_q_[i] = lowstate->msg_.motor_state()[i].q();
+    }
+
+    selected_joint_ = ask_joint_index();
+    if (selected_joint_ < 0) {
+        selected_sdk_slot_ = -1;
+        phase_ = Phase::Idle;
+        spdlog::info("JointStepTest: cancelled, holding current posture.");
+        return;
+    }
+
+    selected_sdk_slot_ = joint_sdk_slots_[selected_joint_];
+    if (selected_sdk_slot_ < 0 ||
+        selected_sdk_slot_ >= static_cast<int>(lowcmd->msg_.motor_cmd().size())) {
+        throw std::runtime_error("JointStepTest: selected SDK slot is out of motor_cmd range.");
+    }
+
+    for (size_t i = 0; i < hold_q_.size(); ++i) {
+        auto& motor = lowcmd->msg_.motor_cmd()[i];
+        motor.mode() = 1;
+        motor.q() = hold_q_[i];
+        motor.dq() = 0.0f;
+        motor.tau() = 0.0f;
+        if (i < kp_.size()) {
+            motor.kp() = kp_[i];
+        }
+        if (i < kd_.size()) {
+            motor.kd() = kd_[i];
+        }
+    }
+
+    const auto& limit = joint_limits_[selected_joint_];
+    phase_ = Phase::ToZero;
+    last_reported_phase_ = Phase::Idle;
+    phase_start_time_ = now_s();
+    phase_start_q_ = hold_q_[selected_sdk_slot_];
+    phase_target_q_ = 0.0f;
+    round_ = 0;
+    open_log();
+
+    spdlog::info("JointStepTest: selected joint {} '{}' sdk_slot {} range [{:.4f}, {:.4f}]",
+                 selected_joint_ + 1, limit.name, selected_sdk_slot_,
+                 limit.lower, limit.upper);
+}
+
+void State_JointStepTest::run()
+{
+    if (hold_q_.empty()) {
+        return;
+    }
+
+    for (size_t i = 0; i < hold_q_.size(); ++i) {
+        auto& motor = lowcmd->msg_.motor_cmd()[i];
+        motor.mode() = 1;
+        motor.q() = hold_q_[i];
+        motor.dq() = 0.0f;
+        motor.tau() = 0.0f;
+        if (i < kp_.size()) {
+            motor.kp() = kp_[i];
+        }
+        if (i < kd_.size()) {
+            motor.kd() = kd_[i];
+        }
+    }
+
+    if (selected_joint_ < 0 || selected_sdk_slot_ < 0 || phase_ == Phase::Idle) {
+        return;
+    }
+
+    if (phase_ != last_reported_phase_) {
+        spdlog::info("JointStepTest: phase {}", phase_name(phase_));
+        last_reported_phase_ = phase_;
+    }
+
+    const auto& limit = joint_limits_[selected_joint_];
+    const double elapsed = now_s() - phase_start_time_;
+    float q = hold_q_[selected_sdk_slot_];
+
+    if (phase_ == Phase::ToZero) {
+        q = ramp(phase_start_q_, phase_target_q_, elapsed);
+        if (std::fabs(q - phase_target_q_) < 1e-5f) {
+            q = phase_target_q_;
+            phase_ = Phase::HoldZero;
+            phase_start_time_ = now_s();
+        }
+    } else if (phase_ == Phase::HoldZero) {
+        q = 0.0f;
+        if (elapsed >= zero_hold_s_) {
+            phase_ = Phase::StepUpper;
+        }
+    } else if (phase_ == Phase::StepUpper) {
+        q = limit.upper;
+        ++round_;
+        phase_ = Phase::HoldUpper;
+        phase_start_time_ = now_s();
+    } else if (phase_ == Phase::HoldUpper) {
+        q = limit.upper;
+        if (elapsed >= hold_upper_s_) {
+            phase_ = Phase::StepLower;
+        }
+    } else if (phase_ == Phase::StepLower) {
+        q = limit.lower;
+        phase_ = Phase::HoldLower;
+        phase_start_time_ = now_s();
+    } else if (phase_ == Phase::HoldLower) {
+        q = limit.lower;
+        if (elapsed >= hold_lower_s_) {
+            phase_ = Phase::StepZero;
+        }
+    } else if (phase_ == Phase::StepZero) {
+        q = 0.0f;
+        phase_ = Phase::HoldFinalZero;
+        phase_start_time_ = now_s();
+    } else if (phase_ == Phase::HoldFinalZero) {
+        q = 0.0f;
+        if (elapsed >= hold_final_zero_s_) {
+            hold_q_[selected_sdk_slot_] = 0.0f;
+            lowcmd->msg_.motor_cmd()[selected_sdk_slot_].q() = 0.0f;
+            log_sample(0.0f);
+            select_next_joint_after_zero();
+            return;
+        }
+    }
+
+    hold_q_[selected_sdk_slot_] = q;
+    lowcmd->msg_.motor_cmd()[selected_sdk_slot_].q() = q;
+    log_sample(q);
+}
+
+void State_JointStepTest::exit()
+{
+    close_log();
+    selected_joint_ = -1;
+    selected_sdk_slot_ = -1;
+    phase_ = Phase::Idle;
+}
