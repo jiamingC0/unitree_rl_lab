@@ -295,10 +295,10 @@ FSM:
       GeneralTracker: "3"
       Dance1: "4"
       Dance2: "5"
-    policy_dir: config/policy/dance/nohead_poker_face
-    policy_file: policy_joint_noise.onnx
+    policy_dir: config/policy/dance/nohead_poker_face_bigPD
+    policy_file: policy_smallbox.onnx
     deploy_file: deploy.yaml
-    motion_file: config/policy/dance/nohead_poker_face/params/poker_face.et1trk
+    motion_file: config/policy/dance/nohead_poker_face_bigPD/params/poker_face.et1trk
     fps: 50
     no_global_mode: true
     use_motion_root_command: true
