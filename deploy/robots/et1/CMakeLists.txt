@@ -16,6 +16,39 @@ list(APPEND CMAKE_PREFIX_PATH "/opt/unitree_robotics")
 
 find_package(unitree_sdk2 REQUIRED CONFIG)
 
+string(TOLOWER "${CMAKE_SYSTEM_PROCESSOR}" TARGET_PROCESSOR)
+set(THIRDPARTY_DIR "${PROJECT_SOURCE_DIR}/../../thirdparty")
+
+if(NOT DEFINED ONNXRUNTIME_ROOT)
+    if(TARGET_PROCESSOR MATCHES "^(x86_64|amd64)$")
+        set(ONNXRUNTIME_ROOT "${THIRDPARTY_DIR}/onnxruntime-linux-x64-1.22.0")
+    elseif(TARGET_PROCESSOR MATCHES "^(aarch64|arm64)$")
+        set(ONNXRUNTIME_ROOT "${THIRDPARTY_DIR}/onnxruntime-linux-aarch64-1.26.0")
+    elseif(TARGET_PROCESSOR MATCHES "^arm")
+        set(ONNXRUNTIME_ROOT "${THIRDPARTY_DIR}/onnxruntime-linux-arm-1.22.0")
+    else()
+        message(FATAL_ERROR
+            "Unsupported target processor: ${CMAKE_SYSTEM_PROCESSOR}. "
+            "Set ONNXRUNTIME_ROOT to the target ONNX Runtime directory.")
+    endif()
+endif()
+
+find_path(ONNXRUNTIME_INCLUDE_DIR
+    NAMES onnxruntime_cxx_api.h
+    PATHS "${ONNXRUNTIME_ROOT}/include"
+    NO_DEFAULT_PATH
+    REQUIRED
+)
+find_library(ONNXRUNTIME_LIBRARY
+    NAMES onnxruntime libonnxruntime.so.1.26.0 libonnxruntime.so.1.22.0
+    PATHS "${ONNXRUNTIME_ROOT}/lib" "${ONNXRUNTIME_ROOT}/lib64"
+    NO_DEFAULT_PATH
+    REQUIRED
+)
+
+message(STATUS "Target processor: ${CMAKE_SYSTEM_PROCESSOR}")
+message(STATUS "ONNX Runtime root: ${ONNXRUNTIME_ROOT}")
+
 set(UNITREE_SDK2_RUNTIME_DIR "/opt/unitree_robotics/lib")
 if(DEFINED UNITREE_SDK2_PATH AND EXISTS "${UNITREE_SDK2_PATH}/lib")
     set(UNITREE_SDK2_RUNTIME_DIR "${UNITREE_SDK2_PATH}/lib")
@@ -26,14 +59,14 @@ set(CMAKE_INSTALL_RPATH "${UNITREE_SDK2_RUNTIME_DIR}")
 include_directories(
   /usr/include/eigen3
   include
-  ${PROJECT_SOURCE_DIR}/../../thirdparty/onnxruntime-linux-x64-1.22.0/include
+  ${ONNXRUNTIME_INCLUDE_DIR}
   ${PROJECT_SOURCE_DIR}/../../include/
 )
 
 link_libraries(
   unitree_sdk2 rt pthread
   Boost::program_options yaml-cpp fmt
-  ${PROJECT_SOURCE_DIR}/../../thirdparty/onnxruntime-linux-x64-1.22.0/lib/libonnxruntime.so.1.22.0
+  ${ONNXRUNTIME_LIBRARY}
 )
 
 file(GLOB_RECURSE ADD_SRC_LIST

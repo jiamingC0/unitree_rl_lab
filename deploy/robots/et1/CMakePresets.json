@@ -1,0 +1,35 @@
+{
+  "version": 6,
+  "configurePresets": [
+    {
+      "name": "x86-release",
+      "displayName": "ET1 x86_64 Release",
+      "generator": "Unix Makefiles",
+      "binaryDir": "${sourceDir}/build/x86-release",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "ONNXRUNTIME_ROOT": "${sourceDir}/../../thirdparty/onnxruntime-linux-x64-1.22.0"
+      }
+    },
+    {
+      "name": "arm64-release",
+      "displayName": "ET1 ARM64 Release",
+      "generator": "Unix Makefiles",
+      "binaryDir": "${sourceDir}/build/arm64-release",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "ONNXRUNTIME_ROOT": "${sourceDir}/../../thirdparty/onnxruntime-linux-aarch64-1.26.0"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "x86-release",
+      "configurePreset": "x86-release"
+    },
+    {
+      "name": "arm64-release",
+      "configurePreset": "arm64-release"
+    }
+  ]
+}
