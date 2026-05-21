@@ -49,6 +49,9 @@ public:
     void start() 
     {
         // Start From State_Passive
+        if (states.empty()) {
+            throw std::runtime_error("FSM: no states configured. Check that config/config.yaml was loaded.");
+        }
         currentState = states[0];
         currentState->enter();
         last_state_run_time_ = std::chrono::steady_clock::now() - std::chrono::duration_cast<std::chrono::steady_clock::duration>(
