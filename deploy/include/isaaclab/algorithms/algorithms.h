@@ -4,7 +4,9 @@
 #pragma once
 
 #include "onnxruntime_cxx_api.h"
+#include <filesystem>
 #include <fmt/ranges.h>
+#include <fstream>
 #include <iostream>
 #include <mutex>
 #include <spdlog/spdlog.h>
@@ -33,11 +35,17 @@ class OrtRunner : public Algorithms
 public:
     OrtRunner(std::string model_path)
     {
+        validate_model_file(model_path);
+
         // Init Model
         env = Ort::Env(ORT_LOGGING_LEVEL_WARNING, "onnx_model");
         session_options.SetGraphOptimizationLevel(ORT_ENABLE_EXTENDED);
 
-        session = std::make_unique<Ort::Session>(env, model_path.c_str(), session_options);
+        try {
+            session = std::make_unique<Ort::Session>(env, model_path.c_str(), session_options);
+        } catch (const Ort::Exception& e) {
+            throw std::runtime_error("Failed to load ONNX model '" + model_path + "': " + e.what());
+        }
 
         for (size_t i = 0; i < session->GetInputCount(); ++i) {
             Ort::TypeInfo input_type = session->GetInputTypeInfo(i);
@@ -105,6 +113,30 @@ public:
     }
 
 private:
+    void validate_model_file(const std::string& model_path) const
+    {
+        const std::filesystem::path path(model_path);
+        if (!std::filesystem::exists(path)) {
+            throw std::runtime_error("ONNX model file does not exist: " + model_path);
+        }
+
+        const auto size = std::filesystem::file_size(path);
+        if (size == 0) {
+            throw std::runtime_error("ONNX model file is empty: " + model_path);
+        }
+
+        std::ifstream model_file(path, std::ios::binary);
+        std::string prefix(64, '\0');
+        model_file.read(prefix.data(), prefix.size());
+        prefix.resize(static_cast<size_t>(model_file.gcount()));
+        if (prefix.rfind("version https://git-lfs.github.com/spec", 0) == 0) {
+            throw std::runtime_error(
+                "ONNX model file is a Git LFS pointer, not the real model: " + model_path
+                + ". Run git lfs pull or copy the actual .onnx file."
+            );
+        }
+    }
+
     std::vector<int64_t> resolve_runtime_shape(const std::vector<int64_t>& declared_shape,
                                                size_t element_count,
                                                const std::string& input_name) const

@@ -47,6 +47,8 @@ public:
         const Eigen::Matrix<float, 6, 1>& command_root_ori_b_unbiased() const { return root_ori_b_unbiased_; }
         const Eigen::Vector3f& command_xy_yaw_vel() const { return xy_yaw_vel_; }
         const Eigen::Matrix<float, 6, 1>& command_foot_support_state() const { return foot_support_state_; }
+        const Eigen::Vector3f& ref_com_rel_navi() const { return ref_com_rel_navi_; }
+        const Eigen::Vector3f& ref_com_vel_navi() const { return ref_com_vel_navi_; }
         size_t current_frame_index() const { return current_frame_index_; }
         float current_time_s() const { return current_time_s_; }
         float duration() const { return duration_; }
@@ -64,6 +66,8 @@ public:
         std::vector<float> body_quat_w_seq_;
         std::vector<float> body_lin_vel_w_seq_;
         std::vector<float> body_ang_vel_w_seq_;
+        std::vector<float> ref_com_rel_navi_seq_;
+        std::vector<float> ref_com_vel_navi_seq_;
         std::vector<int64_t> left_foot_contact_state_seq_;
         std::vector<int64_t> right_foot_contact_state_seq_;
 
@@ -74,6 +78,8 @@ public:
         Eigen::Matrix<float, 6, 1> root_ori_b_unbiased_ = Eigen::Matrix<float, 6, 1>::Zero();
         Eigen::Vector3f xy_yaw_vel_ = Eigen::Vector3f::Zero();
         Eigen::Matrix<float, 6, 1> foot_support_state_ = Eigen::Matrix<float, 6, 1>::Zero();
+        Eigen::Vector3f ref_com_rel_navi_ = Eigen::Vector3f::Zero();
+        Eigen::Vector3f ref_com_vel_navi_ = Eigen::Vector3f::Zero();
         size_t frame_count_ = 0;
         size_t current_frame_index_ = 0;
         float current_time_s_ = 0.0f;

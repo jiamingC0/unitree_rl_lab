@@ -161,6 +161,24 @@ REGISTER_OBSERVATION(command_foot_support_state)
     return std::vector<float>(data.data(), data.data() + data.size());
 }
 
+REGISTER_OBSERVATION(ref_com_rel_navi)
+{
+    if (!State_Track::reference) {
+        throw std::runtime_error("State_Track::reference is null while computing ref_com_rel_navi.");
+    }
+    const auto& data = State_Track::reference->ref_com_rel_navi();
+    return std::vector<float>(data.data(), data.data() + data.size());
+}
+
+REGISTER_OBSERVATION(ref_com_vel_navi)
+{
+    if (!State_Track::reference) {
+        throw std::runtime_error("State_Track::reference is null while computing ref_com_vel_navi.");
+    }
+    const auto& data = State_Track::reference->ref_com_vel_navi();
+    return std::vector<float>(data.data(), data.data() + data.size());
+}
+
 }
 }
 
@@ -182,6 +200,8 @@ void State_Track::ReferenceLoader::reset(const Eigen::VectorXf& default_joint_po
     default_joint_pos_ = default_joint_pos;
     joint_pos_ = Eigen::VectorXf::Zero(kJointDim);
     joint_vel_ = Eigen::VectorXf::Zero(kJointDim);
+    ref_com_rel_navi_.setZero();
+    ref_com_vel_navi_.setZero();
     initial_ref_yaw_bias_ = 0.0f;
     if (frame_count_ > 0 && body_quat_w_seq_.size() >= 4) {
         initial_ref_yaw_bias_ = quat_to_yaw(
@@ -297,6 +317,22 @@ void State_Track::ReferenceLoader::update(float time_s,
         if (right_state >= 0 && right_state <= 2) {
             foot_support_state_[3 + right_state] = 1.0f;
         }
+    }
+
+    ref_com_rel_navi_.setZero();
+    if (!ref_com_rel_navi_seq_.empty()) {
+        const size_t ref_com_offset = frame_index * 3;
+        ref_com_rel_navi_ << ref_com_rel_navi_seq_[ref_com_offset + 0],
+                             ref_com_rel_navi_seq_[ref_com_offset + 1],
+                             ref_com_rel_navi_seq_[ref_com_offset + 2];
+    }
+
+    ref_com_vel_navi_.setZero();
+    if (!ref_com_vel_navi_seq_.empty()) {
+        const size_t ref_com_vel_offset = frame_index * 3;
+        ref_com_vel_navi_ << ref_com_vel_navi_seq_[ref_com_vel_offset + 0],
+                             ref_com_vel_navi_seq_[ref_com_vel_offset + 1],
+                             ref_com_vel_navi_seq_[ref_com_vel_offset + 2];
     }
 }
 
@@ -516,6 +552,16 @@ void State_Track::ReferenceLoader::load_cache_file(const std::filesystem::path& 
                 throw std::runtime_error("Unexpected right_foot_contact_state shape in cache: " + cache_file.string());
             }
             convert_to_int64(right_foot_contact_state_seq_);
+        } else if (name == "ref_com_rel_navi") {
+            if (dims.size() != 2 || dims[1] != 3) {
+                throw std::runtime_error("Unexpected ref_com_rel_navi shape in cache: " + cache_file.string());
+            }
+            convert_to_float(ref_com_rel_navi_seq_);
+        } else if (name == "ref_com_vel_navi") {
+            if (dims.size() != 2 || dims[1] != 3) {
+                throw std::runtime_error("Unexpected ref_com_vel_navi shape in cache: " + cache_file.string());
+            }
+            convert_to_float(ref_com_vel_navi_seq_);
         }
     }
 
@@ -526,6 +572,10 @@ void State_Track::ReferenceLoader::load_cache_file(const std::filesystem::path& 
     if ((!left_foot_contact_state_seq_.empty() && left_foot_contact_state_seq_.size() != frame_count_)
         || (!right_foot_contact_state_seq_.empty() && right_foot_contact_state_seq_.size() != frame_count_)) {
         throw std::runtime_error("Foot contact state length mismatch in cache: " + cache_file.string());
+    }
+    if ((!ref_com_rel_navi_seq_.empty() && ref_com_rel_navi_seq_.size() != frame_count_ * 3)
+        || (!ref_com_vel_navi_seq_.empty() && ref_com_vel_navi_seq_.size() != frame_count_ * 3)) {
+        throw std::runtime_error("Reference COM observation length mismatch in cache: " + cache_file.string());
     }
 }
 

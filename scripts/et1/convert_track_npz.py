@@ -52,7 +52,12 @@ def main() -> None:
     if missing:
         raise ValueError(f"Expected ET1 motion arrays missing from npz: {sorted(missing)}")
     arrays = {key: np.ascontiguousarray(np.asarray(data[key])) for key in required}
-    for key in ("left_foot_contact_state", "right_foot_contact_state"):
+    for key in (
+        "left_foot_contact_state",
+        "right_foot_contact_state",
+        "ref_com_rel_navi",
+        "ref_com_vel_navi",
+    ):
         if key in data.files:
             arrays[key] = np.ascontiguousarray(np.asarray(data[key]))
 
