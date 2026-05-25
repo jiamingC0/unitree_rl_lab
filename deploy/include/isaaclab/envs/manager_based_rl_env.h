@@ -46,7 +46,7 @@ public:
         robot->update();
 
         // load managers
-        action_manager = std::make_unique<ActionManager>(cfg["actions"], this);
+        action_manager = std::make_unique<ActionManager>(cfg["actions"], this, cfg["action_delay"]);
         observation_manager = std::make_unique<ObservationManager>(cfg["observations"], this);
     }
 

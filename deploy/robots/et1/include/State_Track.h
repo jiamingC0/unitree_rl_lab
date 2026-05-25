@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <random>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -116,12 +117,22 @@ private:
                             const std::vector<float>& target_q);
     void close_observation_dump();
     void apply_head_hold_command();
+    void configure_pd_gain_randomization();
+    void reset_pd_gain_scales();
 
     std::unique_ptr<isaaclab::ManagerBasedRLEnv> env;
     std::shared_ptr<ReferenceLoader> reference_;
     std::vector<int> override_joint_ids_;  // Joints whose positions are overridden by reference motion
     std::vector<float> policy_kp_;
     std::vector<float> policy_kd_;
+    std::vector<float> pd_kp_scale_;
+    std::vector<float> pd_kd_scale_;
+    std::vector<int> pd_gain_mask_;
+    std::vector<float> pd_kp_scale_range_{1.0f, 1.0f};
+    std::vector<float> pd_kd_scale_range_{1.0f, 1.0f};
+    bool pd_gain_randomization_enabled_ = false;
+    bool pd_gain_randomize_on_reset_ = false;
+    std::mt19937 pd_gain_rng_{std::random_device{}()};
     std::vector<int> head_hold_sdk_slots_;
     std::vector<float> head_hold_q_;
     std::vector<float> head_hold_kp_;

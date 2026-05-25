@@ -676,6 +676,7 @@ State_Track::State_Track(int state_mode, std::string state_string)
     );
     policy_kp_ = env->cfg["policy_kp"].as<std::vector<float>>();
     policy_kd_ = env->cfg["policy_kd"].as<std::vector<float>>();
+    configure_pd_gain_randomization();
     spdlog::info("Track: deploy config loaded, constructing ONNX session '{}'", policy_path.string());
     env->alg = std::make_unique<isaaclab::OrtRunner>(policy_path.string());
     spdlog::info("Track: ONNX session created successfully");
@@ -712,6 +713,7 @@ void State_Track::enter()
     reference_->reset(env->robot->data.default_joint_pos);
     spdlog::info("Track: reference reset with default joint pose of size {}", env->robot->data.default_joint_pos.size());
     env->reset();
+    reset_pd_gain_scales();
     spdlog::info("Track: environment reset complete");
 
     if (no_global_mode_) {
@@ -806,8 +808,8 @@ void State_Track::run()
         motor.mode() = 1;
         motor.q() = target_q[i];
         motor.dq() = 0.0f;
-        motor.kp() = policy_kp_[i];
-        motor.kd() = policy_kd_[i];
+        motor.kp() = policy_kp_[i] * pd_kp_scale_[i];
+        motor.kd() = policy_kd_[i] * pd_kd_scale_[i];
         motor.tau() = 0.0f;
     }
     apply_head_hold_command();
@@ -822,6 +824,92 @@ void State_Track::exit()
 {
     spdlog::info("Track: exit");
     close_observation_dump();
+}
+
+void State_Track::configure_pd_gain_randomization()
+{
+    const size_t joint_count = policy_kp_.size();
+    pd_kp_scale_.assign(joint_count, 1.0f);
+    pd_kd_scale_.assign(joint_count, 1.0f);
+    pd_gain_mask_.assign(joint_count, 0);
+    pd_kp_scale_range_ = {1.0f, 1.0f};
+    pd_kd_scale_range_ = {1.0f, 1.0f};
+    pd_gain_randomization_enabled_ = false;
+    pd_gain_randomize_on_reset_ = false;
+
+    const auto cfg = env->cfg["pd_gain_randomization"];
+    if (!cfg || !cfg.IsMap()) {
+        return;
+    }
+
+    pd_gain_randomization_enabled_ = cfg["enabled"] ? cfg["enabled"].as<bool>() : true;
+    if (!pd_gain_randomization_enabled_) {
+        return;
+    }
+
+    if (cfg["joint_mask"]) {
+        pd_gain_mask_ = cfg["joint_mask"].as<std::vector<int>>();
+        if (pd_gain_mask_.size() != joint_count) {
+            throw std::runtime_error("Track: pd_gain_randomization.joint_mask size mismatch.");
+        }
+    } else {
+        pd_gain_mask_.assign(joint_count, 1);
+    }
+
+    if (cfg["kp_scale_range"]) {
+        pd_kp_scale_range_ = cfg["kp_scale_range"].as<std::vector<float>>();
+        pd_gain_randomize_on_reset_ = true;
+    } else if (cfg["kp_scale"]) {
+        const float kp_scale = cfg["kp_scale"].as<float>();
+        pd_kp_scale_range_ = {kp_scale, kp_scale};
+    }
+
+    if (cfg["kd_scale_range"]) {
+        pd_kd_scale_range_ = cfg["kd_scale_range"].as<std::vector<float>>();
+        pd_gain_randomize_on_reset_ = true;
+    } else if (cfg["kd_scale"]) {
+        const float kd_scale = cfg["kd_scale"].as<float>();
+        pd_kd_scale_range_ = {kd_scale, kd_scale};
+    }
+
+    if (pd_kp_scale_range_.size() != 2 || pd_kd_scale_range_.size() != 2) {
+        throw std::runtime_error("Track: pd gain scale ranges must have exactly 2 values.");
+    }
+    if (pd_kp_scale_range_[0] > pd_kp_scale_range_[1]
+        || pd_kd_scale_range_[0] > pd_kd_scale_range_[1]) {
+        throw std::runtime_error("Track: invalid pd gain scale range.");
+    }
+
+    pd_gain_randomize_on_reset_ = cfg["randomize_on_reset"]
+        ? cfg["randomize_on_reset"].as<bool>()
+        : pd_gain_randomize_on_reset_;
+    reset_pd_gain_scales();
+}
+
+void State_Track::reset_pd_gain_scales()
+{
+    pd_kp_scale_.assign(policy_kp_.size(), 1.0f);
+    pd_kd_scale_.assign(policy_kd_.size(), 1.0f);
+    if (!pd_gain_randomization_enabled_) {
+        return;
+    }
+
+    std::uniform_real_distribution<float> kp_dist(pd_kp_scale_range_[0], pd_kp_scale_range_[1]);
+    std::uniform_real_distribution<float> kd_dist(pd_kd_scale_range_[0], pd_kd_scale_range_[1]);
+    int active_joint_count = 0;
+    for (size_t i = 0; i < policy_kp_.size(); ++i) {
+        if (i < pd_gain_mask_.size() && pd_gain_mask_[i] != 0) {
+            pd_kp_scale_[i] = pd_gain_randomize_on_reset_ ? kp_dist(pd_gain_rng_) : pd_kp_scale_range_[0];
+            pd_kd_scale_[i] = pd_gain_randomize_on_reset_ ? kd_dist(pd_gain_rng_) : pd_kd_scale_range_[0];
+            active_joint_count += 1;
+        }
+    }
+    spdlog::info("Track: PD gain randomization active on {} joints; kp scale range [{:.3f}, {:.3f}], kd scale range [{:.3f}, {:.3f}]",
+                 active_joint_count,
+                 *std::min_element(pd_kp_scale_.begin(), pd_kp_scale_.end()),
+                 *std::max_element(pd_kp_scale_.begin(), pd_kp_scale_.end()),
+                 *std::min_element(pd_kd_scale_.begin(), pd_kd_scale_.end()),
+                 *std::max_element(pd_kd_scale_.begin(), pd_kd_scale_.end()));
 }
 
 void State_Track::apply_head_hold_command()

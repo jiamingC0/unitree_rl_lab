@@ -5,7 +5,11 @@
 
 #include "isaaclab/envs/manager_based_rl_env.h"
 #include "isaaclab/manager/manager_term_cfg.h"
+#include <algorithm>
+#include <deque>
 #include <numeric>
+#include <random>
+#include <stdexcept>
 
 namespace isaaclab
 {
@@ -43,16 +47,18 @@ inline std::map<std::string, std::function<std::unique_ptr<ActionTerm>(YAML::Nod
 class ActionManager
 {
 public:
-    ActionManager(YAML::Node cfg, ManagerBasedRLEnv* env)
+    ActionManager(YAML::Node cfg, ManagerBasedRLEnv* env, YAML::Node action_delay_cfg = YAML::Node())
     : cfg(cfg), env(env)
     {
         _prepare_terms();
         _action.resize(total_action_dim(), 0.0f);
+        _configure_action_delay(action_delay_cfg);
     }
 
     void reset()
     {
         _action.assign(total_action_dim(), 0.0f);
+        _reset_action_delay();
         for(auto & term : _terms)
         {
             term->reset();
@@ -77,6 +83,12 @@ public:
 
     void process_action(std::vector<float> action)
     {
+        if (action.size() != static_cast<size_t>(total_action_dim()))
+        {
+            throw std::runtime_error("Action size mismatch: got " + std::to_string(action.size())
+                + ", expected " + std::to_string(total_action_dim()));
+        }
+        action = _apply_action_delay(action);
         _action = action;
         int idx = 0;
         for(auto & term : _terms)
@@ -108,6 +120,82 @@ public:
     ManagerBasedRLEnv* env;
 
 private:
+    void _configure_action_delay(YAML::Node delay_cfg)
+    {
+        if (!delay_cfg || !delay_cfg.IsMap())
+        {
+            return;
+        }
+
+        const bool enabled = delay_cfg["enabled"] ? delay_cfg["enabled"].as<bool>() : true;
+        _max_delay_steps = delay_cfg["max_delay_steps"] ? delay_cfg["max_delay_steps"].as<int>() : 0;
+        if (!enabled || _max_delay_steps <= 0)
+        {
+            _max_delay_steps = 0;
+            _delay_steps = 0;
+            return;
+        }
+
+        if (delay_cfg["delay_steps"])
+        {
+            _randomize_delay_on_reset = false;
+            _delay_steps = std::clamp(delay_cfg["delay_steps"].as<int>(), 0, _max_delay_steps);
+        }
+        else
+        {
+            _randomize_delay_on_reset = delay_cfg["randomize_on_reset"]
+                ? delay_cfg["randomize_on_reset"].as<bool>()
+                : true;
+            _delay_steps = _randomize_delay_on_reset ? 0 : _max_delay_steps;
+        }
+
+        _reset_action_delay();
+    }
+
+    void _reset_action_delay()
+    {
+        _action_delay_buffer.clear();
+        if (_max_delay_steps <= 0)
+        {
+            _delay_steps = 0;
+            return;
+        }
+
+        if (_randomize_delay_on_reset)
+        {
+            std::uniform_int_distribution<int> dist(0, _max_delay_steps);
+            _delay_steps = dist(_rng);
+        }
+
+        const std::vector<float> zero_action(total_action_dim(), 0.0f);
+        for (int i = 0; i < _max_delay_steps + 1; ++i)
+        {
+            _action_delay_buffer.push_back(zero_action);
+        }
+    }
+
+    std::vector<float> _apply_action_delay(const std::vector<float>& action)
+    {
+        if (_max_delay_steps <= 0)
+        {
+            return action;
+        }
+
+        if (_action_delay_buffer.empty())
+        {
+            _reset_action_delay();
+        }
+
+        _action_delay_buffer.push_back(action);
+        while (static_cast<int>(_action_delay_buffer.size()) > _max_delay_steps + 1)
+        {
+            _action_delay_buffer.pop_front();
+        }
+
+        const int index = static_cast<int>(_action_delay_buffer.size()) - 1 - _delay_steps;
+        return _action_delay_buffer[std::max(0, index)];
+    }
+
     void _prepare_terms()
     {
         for(auto it = this->cfg.begin(); it != this->cfg.end(); ++it)
@@ -125,6 +213,11 @@ private:
 
     std::vector<float> _action;
     std::vector<std::unique_ptr<ActionTerm>> _terms;
+    int _max_delay_steps = 0;
+    int _delay_steps = 0;
+    bool _randomize_delay_on_reset = true;
+    std::deque<std::vector<float>> _action_delay_buffer;
+    std::mt19937 _rng{std::random_device{}()};
 };
 
 };
