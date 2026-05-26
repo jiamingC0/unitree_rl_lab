@@ -59,8 +59,8 @@ int main(int argc, char** argv)
     auto fsm = std::make_unique<CtrlFSM>(param::config["FSM"]);
     fsm->start();
 
-    std::cout << "Keyboard: [1] FixStand, [2] Velocity, [3] GeneralTracker, [4] Dance1/Wind Summer, [5] Dance2/PokerFace, [6] NoHeadPokerFace, [7] JointTest, [8] JointStepTest, [0] Passive.\n";
-    std::cout << "Joystick: FixStand [LT+Up], Velocity [RB+X], GeneralTracker [LT(2s)+Up], Dance1 [LT(2s)+Down], Dance2 [LT(2s)+Right], NoHeadPokerFace [LT(2s)+Left].\n";
+    std::cout << "Keyboard: [1] FixStand, [2] Velocity, [3] GeneralTrackerCJM, [4] Dance1/Wind Summer, [5] Dance2/PokerFace, [6] NoHeadPokerFace, [7] JointTest, [8] JointStepTest, [9] GeneralTrackerCLN, [0] Passive.\n";
+    std::cout << "Joystick: FixStand [LT+Up], Velocity [RB+X], GeneralTracker hybrid [LT(2s)+Up], Dance1 [LT(2s)+Down], Dance2 [LT(2s)+Right], NoHeadPokerFace [LT(2s)+Left]. Tracker requests use debug/general_tracker_request.txt; prefix with cjm/cln to route profiles.\n";
 
     while (true)
     {

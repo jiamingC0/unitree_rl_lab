@@ -4,8 +4,11 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <mutex>
+#include <optional>
 #include <random>
 #include <string>
+#include <thread>
 #include <unordered_map>
 #include <vector>
 
@@ -19,6 +22,8 @@ public:
     public:
         static constexpr int kJointDim = 26;
         static constexpr int kBodyCount = 27;
+        static constexpr int kFutureHorizon = 25;
+        static constexpr int kFutureCommandDim = 6 + 3 + kJointDim;
         static constexpr uint32_t kCacheVersion = 1;
 
         // A compact runtime cache generated from the original NPZ track.
@@ -40,13 +45,16 @@ public:
                     const Eigen::Quaternionf& current_root_quat,
                     const Eigen::Quaternionf& current_root_quat_unbiased,
                     bool use_motion_root_command = true,
-                    bool use_motion_velocity_command = true);
+                    bool use_motion_velocity_command = true,
+                    bool loop_reference = true);
 
         const Eigen::VectorXf& command_joint_pos() const { return joint_pos_; }
         const Eigen::VectorXf& command_joint_vel() const { return joint_vel_; }
         const Eigen::Matrix<float, 6, 1>& command_root_ori_b() const { return root_ori_b_; }
         const Eigen::Matrix<float, 6, 1>& command_root_ori_b_unbiased() const { return root_ori_b_unbiased_; }
         const Eigen::Vector3f& command_xy_yaw_vel() const { return xy_yaw_vel_; }
+        const Eigen::Vector2f& command_yaw() const { return yaw_command_; }
+        const std::vector<float>& future_commands() const { return future_commands_; }
         const Eigen::Matrix<float, 6, 1>& command_foot_support_state() const { return foot_support_state_; }
         const Eigen::Vector3f& ref_com_rel_navi() const { return ref_com_rel_navi_; }
         const Eigen::Vector3f& ref_com_vel_navi() const { return ref_com_vel_navi_; }
@@ -78,6 +86,8 @@ public:
         Eigen::Matrix<float, 6, 1> root_ori_b_ = Eigen::Matrix<float, 6, 1>::Zero();
         Eigen::Matrix<float, 6, 1> root_ori_b_unbiased_ = Eigen::Matrix<float, 6, 1>::Zero();
         Eigen::Vector3f xy_yaw_vel_ = Eigen::Vector3f::Zero();
+        Eigen::Vector2f yaw_command_ = Eigen::Vector2f(1.0f, 0.0f);
+        std::vector<float> future_commands_;
         Eigen::Matrix<float, 6, 1> foot_support_state_ = Eigen::Matrix<float, 6, 1>::Zero();
         Eigen::Vector3f ref_com_rel_navi_ = Eigen::Vector3f::Zero();
         Eigen::Vector3f ref_com_vel_navi_ = Eigen::Vector3f::Zero();
@@ -91,14 +101,17 @@ public:
 
     State_Track(int state_mode, std::string state_string = "Track");
 
-    double run_dt() const override { return 0.02; }
+    double run_dt() const override { return hybrid_locomotion_enabled_ && !active_tracking_ ? 0.001 : 0.02; }
     void enter();
     void run();
     void exit();
 
     static std::shared_ptr<ReferenceLoader> reference;
+    static void request_motion_file(const std::filesystem::path& motion_file);
+    static bool has_pending_motion_request();
 
 private:
+    static std::optional<std::filesystem::path> consume_pending_motion_file();
     void dump_first_frame_debug(const std::unordered_map<std::string, std::vector<float>>& obs,
                                 const std::vector<float>& action,
                                 const std::vector<float>& target_q);
@@ -119,12 +132,37 @@ private:
     void apply_head_hold_command();
     void configure_pd_gain_randomization();
     void reset_pd_gain_scales();
+    bool poll_motion_request_file();
+    bool route_profile_request_to(const std::string& target_state);
+    bool start_requested_motion(const std::filesystem::path& motion_file);
+    void run_tracking_policy();
+    void run_locomotion_policy();
+    void write_policy_action(const std::vector<float>& action,
+                             const std::vector<float>& kp,
+                             const std::vector<float>& kd,
+                             isaaclab::ManagerBasedRLEnv* policy_env);
+    void initialize_policy_motors(isaaclab::ManagerBasedRLEnv* policy_env,
+                                  const std::vector<float>& kp,
+                                  const std::vector<float>& kd,
+                                  bool clear_uncontrolled_motors);
+    void apply_hybrid_idle_hold();
+    void start_locomotion_policy_thread();
+    void stop_locomotion_policy_thread();
 
     std::unique_ptr<isaaclab::ManagerBasedRLEnv> env;
+    std::unique_ptr<isaaclab::ManagerBasedRLEnv> locomotion_env_;
     std::shared_ptr<ReferenceLoader> reference_;
+    std::filesystem::path default_motion_file_;
+    std::filesystem::path request_file_;
+    float reference_fps_ = 50.0f;
     std::vector<int> override_joint_ids_;  // Joints whose positions are overridden by reference motion
     std::vector<float> policy_kp_;
     std::vector<float> policy_kd_;
+    std::vector<float> locomotion_policy_kp_;
+    std::vector<float> locomotion_policy_kd_;
+    std::vector<float> hybrid_idle_hold_q_;
+    std::vector<float> hybrid_idle_hold_kp_;
+    std::vector<float> hybrid_idle_hold_kd_;
     std::vector<float> pd_kp_scale_;
     std::vector<float> pd_kd_scale_;
     std::vector<int> pd_gain_mask_;
@@ -143,6 +181,12 @@ private:
     bool use_motion_root_command_ = false;
     bool use_motion_velocity_command_ = false;
     bool no_global_mode_ = false;
+    bool one_shot_mode_ = false;
+    bool require_requested_motion_ = false;
+    bool playback_complete_ = false;
+    bool active_tracking_ = false;
+    bool hybrid_locomotion_enabled_ = false;
+    bool locomotion_policy_thread_running_ = false;
     bool has_initial_yaw_bias_ = false;
     float initial_yaw_bias_ = 0.0f;
     bool observation_dump_enabled_ = false;
@@ -150,6 +194,10 @@ private:
     std::filesystem::path observation_dump_file_;
     std::ofstream observation_dump_stream_;
     size_t observation_dump_frame_ = 0;
+    std::thread locomotion_policy_thread_;
+
+    static std::mutex pending_motion_mutex_;
+    static std::optional<std::filesystem::path> pending_motion_file_;
 };
 
 REGISTER_FSM(State_Track)

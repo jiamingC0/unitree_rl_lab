@@ -1,8 +1,11 @@
 #include "State_Velocity.h"
 
 #include <algorithm>
+#include <fstream>
+#include <sstream>
 #include <unordered_map>
 
+#include "State_Track.h"
 #include "isaaclab/envs/mdp/actions/joint_actions.h"
 #include "isaaclab/envs/mdp/observations/observations.h"
 #include "isaaclab/envs/mdp/terminations.h"
@@ -31,6 +34,99 @@ REGISTER_OBSERVATION(keyboard_velocity_commands)
 }
 }
 
+namespace
+{
+std::string trim_copy(const std::string& value)
+{
+    const auto begin = value.find_first_not_of(" \t\r\n");
+    if (begin == std::string::npos) {
+        return "";
+    }
+    const auto end = value.find_last_not_of(" \t\r\n");
+    return value.substr(begin, end - begin + 1);
+}
+
+std::string tracker_target_from_token(const std::string& token)
+{
+    static const std::unordered_map<std::string, std::string> aliases = {
+        {"general", "GeneralTracker"},
+        {"tracker", "GeneralTracker"},
+        {"generaltracker", "GeneralTracker"},
+        {"GeneralTracker", "GeneralTracker"},
+        {"debug", "GeneralTrackerCJM"},
+        {"cjm", "GeneralTrackerCJM"},
+        {"general_tracker_cjm", "GeneralTrackerCJM"},
+        {"generaltrackercjm", "GeneralTrackerCJM"},
+        {"GeneralTrackerCJM", "GeneralTrackerCJM"},
+        {"cln", "GeneralTrackerCLN"},
+        {"general_tracker_cln", "GeneralTrackerCLN"},
+        {"generaltrackercln", "GeneralTrackerCLN"},
+        {"GeneralTrackerCLN", "GeneralTrackerCLN"},
+    };
+    const auto it = aliases.find(token);
+    return it == aliases.end() ? "" : it->second;
+}
+}
+
+bool State_Velocity::prepare_general_tracker_request()
+{
+    if (pending_tracker_target_state_) {
+        return true;
+    }
+    if (State_Track::has_pending_motion_request()) {
+        pending_tracker_target_state_ = "GeneralTracker";
+        return true;
+    }
+    if (general_tracker_request_file_.empty()
+        || !std::filesystem::exists(general_tracker_request_file_)) {
+        return false;
+    }
+
+    std::ifstream input(general_tracker_request_file_);
+    std::string line;
+    std::getline(input, line);
+    input.close();
+
+    std::error_code ec;
+    std::filesystem::remove(general_tracker_request_file_, ec);
+
+    line = trim_copy(line);
+    if (line.empty()) {
+        spdlog::warn("Velocity: ignored empty GeneralTracker request file '{}'",
+                     general_tracker_request_file_.string());
+        return false;
+    }
+
+    std::istringstream ss(line);
+    std::string first_token;
+    ss >> first_token;
+    std::string target_state = tracker_target_from_token(first_token);
+    std::string motion_file;
+    if (target_state.empty()) {
+        target_state = "GeneralTracker";
+        motion_file = line;
+    } else {
+        std::getline(ss, motion_file);
+        motion_file = trim_copy(motion_file);
+    }
+
+    if (motion_file.empty()) {
+        spdlog::warn("Velocity: ignored GeneralTracker request without motion path: '{}'", line);
+        return false;
+    }
+    if (!FSMStringMap.right.count(target_state)) {
+        spdlog::warn("Velocity: ignored GeneralTracker request for unavailable target '{}'", target_state);
+        return false;
+    }
+
+    State_Track::request_motion_file(motion_file);
+    pending_tracker_target_state_ = target_state;
+    spdlog::info("Velocity: routed GeneralTracker request to {} with motion '{}'",
+                 target_state,
+                 motion_file);
+    return true;
+}
+
 State_Velocity::State_Velocity(int state_mode, std::string state_string)
     : FSMState(state_mode, state_string)
 {
@@ -47,6 +143,42 @@ State_Velocity::State_Velocity(int state_mode, std::string state_string)
     env->alg = std::make_unique<isaaclab::OrtRunner>(policy_dir / "exported" / policy_file);
     policy_kp_ = env->cfg["policy_kp"] ? env->cfg["policy_kp"].as<std::vector<float>>() : env->robot->data.joint_stiffness;
     policy_kd_ = env->cfg["policy_kd"] ? env->cfg["policy_kd"].as<std::vector<float>>() : env->robot->data.joint_damping;
+
+    if (FSMStringMap.right.count("GeneralTracker")) {
+        auto tracker_cfg = param::config["FSM"]["GeneralTracker"];
+        const std::string request_file = tracker_cfg["request_file"]
+            ? tracker_cfg["request_file"].as<std::string>()
+            : "debug/general_tracker_request.txt";
+        general_tracker_request_file_ = request_file;
+        if (!general_tracker_request_file_.is_absolute()) {
+            general_tracker_request_file_ = param::proj_dir / general_tracker_request_file_;
+        }
+
+        const std::vector<std::string> tracker_targets = {
+            "GeneralTracker",
+            "GeneralTrackerCJM",
+            "GeneralTrackerCLN",
+        };
+        for (const auto& target_state : tracker_targets) {
+            if (!FSMStringMap.right.count(target_state)) {
+                continue;
+            }
+            registered_checks.push_back({
+                [this, target_state]() -> bool {
+                    if (!prepare_general_tracker_request()) {
+                        return false;
+                    }
+                    if (pending_tracker_target_state_ != target_state) {
+                        return false;
+                    }
+                    pending_tracker_target_state_.reset();
+                    return true;
+                },
+                FSMStringMap.right.at(target_state),
+                "external " + target_state + " motion request"
+            });
+        }
+    }
 
     registered_checks.push_back({
         [&]() -> bool { return isaaclab::mdp::bad_orientation(env.get(), 1.0); },

@@ -6,6 +6,7 @@
 #include <cstring>
 #include <cstdlib>
 #include <ctime>
+#include <fstream>
 #include <iomanip>
 #include <limits>
 #include <sstream>
@@ -16,6 +17,8 @@
 #include "isaaclab/envs/mdp/actions/joint_actions.h"
 
 std::shared_ptr<State_Track::ReferenceLoader> State_Track::reference = nullptr;
+std::mutex State_Track::pending_motion_mutex_;
+std::optional<std::filesystem::path> State_Track::pending_motion_file_;
 
 namespace
 {
@@ -61,6 +64,69 @@ std::filesystem::path timestamped_dump_path(const std::filesystem::path& base_pa
     const auto ext = base_path.extension().string();
     return dir / (stem + "_" + timestamp_string() + ext);
 }
+
+std::string trim_copy(const std::string& value)
+{
+    const auto begin = value.find_first_not_of(" \t\r\n");
+    if (begin == std::string::npos) {
+        return "";
+    }
+    const auto end = value.find_last_not_of(" \t\r\n");
+    return value.substr(begin, end - begin + 1);
+}
+
+std::string tracker_target_from_token(const std::string& token)
+{
+    static const std::unordered_map<std::string, std::string> aliases = {
+        {"general", "GeneralTracker"},
+        {"tracker", "GeneralTracker"},
+        {"generaltracker", "GeneralTracker"},
+        {"GeneralTracker", "GeneralTracker"},
+        {"debug", "GeneralTrackerCJM"},
+        {"cjm", "GeneralTrackerCJM"},
+        {"general_tracker_cjm", "GeneralTrackerCJM"},
+        {"generaltrackercjm", "GeneralTrackerCJM"},
+        {"GeneralTrackerCJM", "GeneralTrackerCJM"},
+        {"cln", "GeneralTrackerCLN"},
+        {"general_tracker_cln", "GeneralTrackerCLN"},
+        {"generaltrackercln", "GeneralTrackerCLN"},
+        {"GeneralTrackerCLN", "GeneralTrackerCLN"},
+    };
+    const auto it = aliases.find(token);
+    return it == aliases.end() ? "" : it->second;
+}
+
+struct TrackerRequestLine
+{
+    std::string target_state;
+    std::string motion_file;
+    bool has_profile = false;
+};
+
+TrackerRequestLine parse_tracker_request_line(const std::string& raw_line)
+{
+    TrackerRequestLine request;
+    const auto line = trim_copy(raw_line);
+    if (line.empty()) {
+        return request;
+    }
+
+    std::istringstream ss(line);
+    std::string first_token;
+    ss >> first_token;
+    request.target_state = tracker_target_from_token(first_token);
+    if (request.target_state.empty()) {
+        request.target_state = "GeneralTracker";
+        request.motion_file = line;
+        request.has_profile = false;
+        return request;
+    }
+
+    std::getline(ss, request.motion_file);
+    request.motion_file = trim_copy(request.motion_file);
+    request.has_profile = true;
+    return request;
+}
 }
 
 namespace isaaclab
@@ -92,6 +158,15 @@ REGISTER_OBSERVATION(command_xy_yaw_vel)
         throw std::runtime_error("State_Track::reference is null while computing command_xy_yaw_vel.");
     }
     const auto & data = State_Track::reference->command_xy_yaw_vel();
+    return std::vector<float>(data.data(), data.data() + data.size());
+}
+
+REGISTER_OBSERVATION(command_yaw)
+{
+    if (!State_Track::reference) {
+        throw std::runtime_error("State_Track::reference is null while computing command_yaw.");
+    }
+    const auto& data = State_Track::reference->command_yaw();
     return std::vector<float>(data.data(), data.data() + data.size());
 }
 
@@ -143,6 +218,14 @@ REGISTER_OBSERVATION(motion_command)
     return data;
 }
 
+REGISTER_OBSERVATION(future_commands)
+{
+    if (!State_Track::reference) {
+        throw std::runtime_error("State_Track::reference is null while computing future_commands.");
+    }
+    return State_Track::reference->future_commands();
+}
+
 REGISTER_OBSERVATION(motion_anchor_ori_b)
 {
     if (!State_Track::reference) {
@@ -191,6 +274,7 @@ State_Track::ReferenceLoader::ReferenceLoader(const std::filesystem::path& motio
     load_cache_file(cache_file);
     joint_pos_ = Eigen::VectorXf::Zero(kJointDim);
     joint_vel_ = Eigen::VectorXf::Zero(kJointDim);
+    future_commands_.assign(kFutureHorizon * kFutureCommandDim, 0.0f);
     duration_ = frame_count_ > 0 ? static_cast<float>(frame_count_ - 1) / fps_ : 0.0f;
     spdlog::info("Track: reference loaded with {} frames, duration {:.3f}s", frame_count_, duration_);
 }
@@ -200,6 +284,8 @@ void State_Track::ReferenceLoader::reset(const Eigen::VectorXf& default_joint_po
     default_joint_pos_ = default_joint_pos;
     joint_pos_ = Eigen::VectorXf::Zero(kJointDim);
     joint_vel_ = Eigen::VectorXf::Zero(kJointDim);
+    yaw_command_ << 1.0f, 0.0f;
+    std::fill(future_commands_.begin(), future_commands_.end(), 0.0f);
     ref_com_rel_navi_.setZero();
     ref_com_vel_navi_.setZero();
     initial_ref_yaw_bias_ = 0.0f;
@@ -228,17 +314,20 @@ void State_Track::ReferenceLoader::update(float time_s,
                                           const Eigen::Quaternionf& current_root_quat,
                                           const Eigen::Quaternionf& current_root_quat_unbiased,
                                           bool use_motion_root_command,
-                                          bool use_motion_velocity_command)
+                                          bool use_motion_velocity_command,
+                                          bool loop_reference)
 {
     if (frame_count_ == 0) {
         return;
     }
 
-    // Loop the reference so tracking can run continuously in sim.
-    const float loop_time = duration_ > 0.0f ? std::fmod(std::max(time_s, 0.0f), duration_) : 0.0f;
-    const size_t frame_index = std::min(static_cast<size_t>(std::round(loop_time * fps_)), frame_count_ - 1);
+    const float clamped_time = std::max(time_s, 0.0f);
+    const float ref_time = (loop_reference && duration_ > 0.0f)
+        ? std::fmod(clamped_time, duration_)
+        : std::min(clamped_time, duration_);
+    const size_t frame_index = std::min(static_cast<size_t>(std::round(ref_time * fps_)), frame_count_ - 1);
     current_frame_index_ = frame_index;
-    current_time_s_ = loop_time;
+    current_time_s_ = ref_time;
 
     const size_t joint_offset = frame_index * kJointDim;
     for (int i = 0; i < kJointDim; ++i) {
@@ -285,6 +374,8 @@ void State_Track::ReferenceLoader::update(float time_s,
     const float yaw_ref = quat_to_yaw(ref_root_q.w(), ref_root_q.x(), ref_root_q.y(), ref_root_q.z());
     const Eigen::Quaternionf ref_yaw_q =
         Eigen::AngleAxisf(yaw_ref, Eigen::Vector3f::UnitZ()) * Eigen::Quaternionf::Identity();
+    const float yaw_error = wrap_to_pi(yaw_ref - current_root_yaw);
+    yaw_command_ << std::cos(yaw_error), std::sin(yaw_error);
     const size_t root_lin_vel_offset = root_body_offset * 3;
     const size_t root_ang_vel_offset = root_body_offset * 3;
     const Eigen::Vector3f ref_lin_vel_w_raw(
@@ -305,6 +396,75 @@ void State_Track::ReferenceLoader::update(float time_s,
         xy_yaw_vel_ << ref_lin_vel_navi.x(), ref_lin_vel_navi.y(), ref_ang_vel_navi.z();
     } else {
         xy_yaw_vel_.setZero();
+    }
+
+    if (future_commands_.size() != static_cast<size_t>(kFutureHorizon * kFutureCommandDim)) {
+        future_commands_.assign(kFutureHorizon * kFutureCommandDim, 0.0f);
+    }
+    for (int horizon_idx = 0; horizon_idx < kFutureHorizon; ++horizon_idx) {
+        const size_t future_frame = std::min(frame_index + static_cast<size_t>(horizon_idx + 1), frame_count_ - 1);
+        const size_t future_body_offset = future_frame * kBodyCount;
+        const size_t future_quat_offset = future_body_offset * 4;
+        Eigen::Quaternionf future_ref_root_q(
+            body_quat_w_seq_[future_quat_offset + 0],
+            body_quat_w_seq_[future_quat_offset + 1],
+            body_quat_w_seq_[future_quat_offset + 2],
+            body_quat_w_seq_[future_quat_offset + 3]
+        );
+        future_ref_root_q.normalize();
+        future_ref_root_q = (ref_world_align_q * future_ref_root_q).normalized();
+
+        Eigen::Matrix<float, 6, 1> future_root_ori_b;
+        if (use_motion_root_command) {
+            const Eigen::Matrix3f future_root_rot_b =
+                (current_root_quat.normalized().conjugate() * future_ref_root_q).toRotationMatrix();
+            future_root_ori_b << future_root_rot_b(0, 0), future_root_rot_b(0, 1),
+                                 future_root_rot_b(1, 0), future_root_rot_b(1, 1),
+                                 future_root_rot_b(2, 0), future_root_rot_b(2, 1);
+        } else {
+            future_root_ori_b << 1.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f;
+        }
+
+        Eigen::Vector3f future_xy_yaw_vel = Eigen::Vector3f::Zero();
+        if (use_motion_velocity_command) {
+            const float future_yaw_ref = quat_to_yaw(
+                future_ref_root_q.w(),
+                future_ref_root_q.x(),
+                future_ref_root_q.y(),
+                future_ref_root_q.z()
+            );
+            const Eigen::Quaternionf future_ref_yaw_q =
+                Eigen::AngleAxisf(future_yaw_ref, Eigen::Vector3f::UnitZ()) * Eigen::Quaternionf::Identity();
+            const size_t future_lin_vel_offset = future_body_offset * 3;
+            const size_t future_ang_vel_offset = future_body_offset * 3;
+            const Eigen::Vector3f future_lin_vel_w_raw(
+                body_lin_vel_w_seq_[future_lin_vel_offset + 0],
+                body_lin_vel_w_seq_[future_lin_vel_offset + 1],
+                body_lin_vel_w_seq_[future_lin_vel_offset + 2]
+            );
+            const Eigen::Vector3f future_ang_vel_w_raw(
+                body_ang_vel_w_seq_[future_ang_vel_offset + 0],
+                body_ang_vel_w_seq_[future_ang_vel_offset + 1],
+                body_ang_vel_w_seq_[future_ang_vel_offset + 2]
+            );
+            const Eigen::Vector3f future_lin_vel_navi =
+                future_ref_yaw_q.conjugate() * (ref_world_align_q * future_lin_vel_w_raw);
+            const Eigen::Vector3f future_ang_vel_navi =
+                future_ref_yaw_q.conjugate() * (ref_world_align_q * future_ang_vel_w_raw);
+            future_xy_yaw_vel << future_lin_vel_navi.x(), future_lin_vel_navi.y(), future_ang_vel_navi.z();
+        }
+
+        size_t out_offset = static_cast<size_t>(horizon_idx) * kFutureCommandDim;
+        for (int i = 0; i < 6; ++i) {
+            future_commands_[out_offset++] = future_root_ori_b[i];
+        }
+        for (int i = 0; i < 3; ++i) {
+            future_commands_[out_offset++] = future_xy_yaw_vel[i];
+        }
+        const size_t future_joint_offset = future_frame * kJointDim;
+        for (int i = 0; i < kJointDim; ++i) {
+            future_commands_[out_offset++] = joint_pos_seq_[future_joint_offset + i];
+        }
     }
 
     foot_support_state_.setZero();
@@ -584,6 +744,27 @@ float State_Track::ReferenceLoader::wrap_to_pi(float angle) const
     return std::atan2(std::sin(angle), std::cos(angle));
 }
 
+void State_Track::request_motion_file(const std::filesystem::path& motion_file)
+{
+    std::lock_guard<std::mutex> lock(pending_motion_mutex_);
+    pending_motion_file_ = motion_file;
+    spdlog::info("Track: pending motion request set to '{}'", motion_file.string());
+}
+
+bool State_Track::has_pending_motion_request()
+{
+    std::lock_guard<std::mutex> lock(pending_motion_mutex_);
+    return pending_motion_file_.has_value();
+}
+
+std::optional<std::filesystem::path> State_Track::consume_pending_motion_file()
+{
+    std::lock_guard<std::mutex> lock(pending_motion_mutex_);
+    auto motion_file = pending_motion_file_;
+    pending_motion_file_.reset();
+    return motion_file;
+}
+
 State_Track::State_Track(int state_mode, std::string state_string)
     : FSMState(state_mode, state_string)
 {
@@ -612,6 +793,20 @@ State_Track::State_Track(int state_mode, std::string state_string)
     spdlog::info("Track: use_motion_root_command = {}, use_motion_velocity_command = {}",
                  use_motion_root_command_ ? "true" : "false",
                  use_motion_velocity_command_ ? "true" : "false");
+    one_shot_mode_ = cfg["one_shot_mode"].as<bool>(false);
+    require_requested_motion_ = cfg["require_requested_motion"].as<bool>(false);
+    spdlog::info("Track: one_shot_mode = {}, require_requested_motion = {}",
+                 one_shot_mode_ ? "true" : "false",
+                 require_requested_motion_ ? "true" : "false");
+    hybrid_locomotion_enabled_ = cfg["hybrid_locomotion"].as<bool>(false);
+    spdlog::info("Track: hybrid_locomotion = {}", hybrid_locomotion_enabled_ ? "true" : "false");
+    if (one_shot_mode_ && !hybrid_locomotion_enabled_ && FSMStringMap.right.count("Velocity")) {
+        registered_checks.push_back({
+            [this]() -> bool { return playback_complete_; },
+            FSMStringMap.right.at("Velocity"),
+            "track playback complete"
+        });
+    }
     debug_dump_first_frame_ = cfg["debug_dump_first_frame"].as<bool>(false);
     const std::string default_debug_dir = "debug/et1_track_first_frame";
     debug_dump_dir_ = cfg["debug_dump_dir"]
@@ -654,19 +849,42 @@ State_Track::State_Track(int state_mode, std::string state_string)
         }
         spdlog::info("Track: head hold enabled for {} sdk joints", head_hold_sdk_slots_.size());
     }
+    if (param::config["FSM"]["FixStand"]) {
+        const auto fixstand_cfg = param::config["FSM"]["FixStand"];
+        hybrid_idle_hold_kp_ = fixstand_cfg["kp"].as<std::vector<float>>();
+        hybrid_idle_hold_kd_ = fixstand_cfg["kd"].as<std::vector<float>>();
+        if (fixstand_cfg["qs"] && fixstand_cfg["qs"].IsSequence() && fixstand_cfg["qs"].size() > 0) {
+            hybrid_idle_hold_q_ = fixstand_cfg["qs"][fixstand_cfg["qs"].size() - 1].as<std::vector<float>>();
+        }
+        if (hybrid_locomotion_enabled_) {
+            spdlog::info("Track: hybrid idle hold loaded from FixStand for {} sdk slots",
+                         hybrid_idle_hold_q_.size());
+        }
+    }
 
     const std::string policy_file = cfg["policy_file"] ? cfg["policy_file"].as<std::string>() : "policy.onnx";
     const std::string deploy_file = cfg["deploy_file"] ? cfg["deploy_file"].as<std::string>() : "deploy.yaml";
     const auto policy_path = policy_dir / "exported" / policy_file;
-
-    std::filesystem::path motion_file = cfg["motion_file"].as<std::string>();
-    if (!motion_file.is_absolute()) {
-        motion_file = param::proj_dir / motion_file;
+    request_file_ = cfg["request_file"]
+        ? std::filesystem::path(cfg["request_file"].as<std::string>())
+        : std::filesystem::path("debug/general_tracker_request.txt");
+    if (!request_file_.is_absolute()) {
+        request_file_ = param::proj_dir / request_file_;
     }
-    spdlog::info("Track: resolved motion file '{}'", motion_file.string());
-    reference_ = std::make_shared<ReferenceLoader>(motion_file, cfg["fps"].as<float>());
+
+    default_motion_file_ = cfg["motion_file"].as<std::string>();
+    if (!default_motion_file_.is_absolute()) {
+        default_motion_file_ = param::proj_dir / default_motion_file_;
+    }
+    reference_fps_ = cfg["fps"].as<float>();
+    spdlog::info("Track: resolved default motion file '{}'", default_motion_file_.string());
+    reference_ = std::make_shared<ReferenceLoader>(default_motion_file_, reference_fps_);
     reference = reference_;
-    spdlog::info("Track: reference pointer initialized");
+    if (require_requested_motion_) {
+        spdlog::info("Track: default reference loaded for observation shape probing only; execution waits for external motion request");
+    } else {
+        spdlog::info("Track: reference pointer initialized");
+    }
 
     spdlog::info("Track: loading deploy config '{}'", (policy_dir / "params" / deploy_file).string());
     env = std::make_unique<isaaclab::ManagerBasedRLEnv>(
@@ -681,6 +899,54 @@ State_Track::State_Track(int state_mode, std::string state_string)
     env->alg = std::make_unique<isaaclab::OrtRunner>(policy_path.string());
     spdlog::info("Track: ONNX session created successfully");
 
+    if (hybrid_locomotion_enabled_) {
+        const auto locomotion_policy_dir = param::parser_policy_dir(
+            cfg["locomotion_policy_dir"]
+                ? cfg["locomotion_policy_dir"].as<std::string>()
+                : param::config["FSM"]["Velocity"]["policy_dir"].as<std::string>());
+        const std::string locomotion_policy_file = cfg["locomotion_policy_file"]
+            ? cfg["locomotion_policy_file"].as<std::string>()
+            : param::config["FSM"]["Velocity"]["policy_file"].as<std::string>();
+        const std::string locomotion_deploy_file = cfg["locomotion_deploy_file"]
+            ? cfg["locomotion_deploy_file"].as<std::string>()
+            : param::config["FSM"]["Velocity"]["deploy_file"].as<std::string>();
+
+        spdlog::info("Track: loading hybrid locomotion deploy config '{}'",
+                     (locomotion_policy_dir / "params" / locomotion_deploy_file).string());
+        locomotion_env_ = std::make_unique<isaaclab::ManagerBasedRLEnv>(
+            YAML::LoadFile(locomotion_policy_dir / "params" / locomotion_deploy_file),
+            std::make_shared<unitree::BaseArticulation<LowState_t::SharedPtr, HighState_t::SharedPtr>>(
+                FSMState::lowstate, FSMState::highstate)
+        );
+        locomotion_env_->alg = std::make_unique<isaaclab::OrtRunner>(
+            (locomotion_policy_dir / "exported" / locomotion_policy_file).string());
+        locomotion_policy_kp_ = locomotion_env_->cfg["policy_kp"]
+            ? locomotion_env_->cfg["policy_kp"].as<std::vector<float>>()
+            : locomotion_env_->robot->data.joint_stiffness;
+        locomotion_policy_kd_ = locomotion_env_->cfg["policy_kd"]
+            ? locomotion_env_->cfg["policy_kd"].as<std::vector<float>>()
+            : locomotion_env_->robot->data.joint_damping;
+        spdlog::info("Track: hybrid locomotion policy loaded");
+    }
+
+    const std::vector<std::string> tracker_targets = {
+        "GeneralTracker",
+        "GeneralTrackerCJM",
+        "GeneralTrackerCLN",
+    };
+    for (const auto& target_state : tracker_targets) {
+        if (target_state == state_string || !FSMStringMap.right.count(target_state)) {
+            continue;
+        }
+        registered_checks.push_back({
+            [this, target_state]() -> bool {
+                return route_profile_request_to(target_state);
+            },
+            FSMStringMap.right.at(target_state),
+            "external " + target_state + " profile request"
+        });
+    }
+
     // this->registered_checks.emplace_back(
     //     std::make_pair(
     //         [&]()->bool{ return isaaclab::mdp::bad_orientation(env.get(), 1.0); },
@@ -693,32 +959,61 @@ State_Track::State_Track(int state_mode, std::string state_string)
 void State_Track::enter()
 {
     spdlog::info("Track: enter");
+    stop_locomotion_policy_thread();
     has_initial_yaw_bias_ = false;
     initial_yaw_bias_ = 0.0f;
     first_frame_debug_dumped_ = false;
+    playback_complete_ = false;
+    active_tracking_ = false;
+
+    if (auto requested_motion = consume_pending_motion_file()) {
+        active_tracking_ = start_requested_motion(*requested_motion);
+        if (!active_tracking_ && !hybrid_locomotion_enabled_) {
+            playback_complete_ = true;
+            return;
+        }
+    } else if (require_requested_motion_ && !hybrid_locomotion_enabled_) {
+        spdlog::warn("Track: no requested motion is pending; GeneralTracker will return to Velocity without running fallback motion_file");
+        playback_complete_ = true;
+        return;
+    } else if (!hybrid_locomotion_enabled_) {
+        reference = reference_;
+        active_tracking_ = true;
+    }
+
+    if (active_tracking_ && !reference_) {
+        spdlog::warn("Track: no reference is loaded; returning to Velocity");
+        playback_complete_ = true;
+        return;
+    }
+
     open_observation_dump();
-    for (int i = 0; i < lowcmd->msg_.motor_cmd().size(); ++i)
-    {
-        lowcmd->msg_.motor_cmd()[i].kp() = 0.0f;
-        lowcmd->msg_.motor_cmd()[i].kd() = 0.0f;
-        lowcmd->msg_.motor_cmd()[i].dq() = 0.0f;
-        lowcmd->msg_.motor_cmd()[i].tau() = 0.0f;
-    }
-    for (int i = 0; i < env->robot->data.joint_ids_map.size(); ++i) {
-        lowcmd->msg_.motor_cmd()[env->robot->data.policy_joint_to_sdk_slot(i)].mode() = 1;
-    }
+    auto* active_env = active_tracking_ ? env.get() : locomotion_env_.get();
+    const auto& active_kp = active_tracking_ ? policy_kp_ : locomotion_policy_kp_;
+    const auto& active_kd = active_tracking_ ? policy_kd_ : locomotion_policy_kd_;
+    const bool clear_uncontrolled_motors = active_tracking_ || !hybrid_locomotion_enabled_;
+    initialize_policy_motors(active_env, active_kp, active_kd, clear_uncontrolled_motors);
+    apply_hybrid_idle_hold();
     apply_head_hold_command();
 
-    reference = reference_;
-    reference_->reset(env->robot->data.default_joint_pos);
-    spdlog::info("Track: reference reset with default joint pose of size {}", env->robot->data.default_joint_pos.size());
-    env->reset();
+    if (active_tracking_) {
+        reference_->reset(env->robot->data.default_joint_pos);
+        spdlog::info("Track: reference reset with default joint pose of size {}", env->robot->data.default_joint_pos.size());
+        env->reset();
+    } else if (locomotion_env_) {
+        locomotion_env_->reset();
+        start_locomotion_policy_thread();
+    }
     reset_pd_gain_scales();
     spdlog::info("Track: environment reset complete");
 
     if (no_global_mode_) {
-        env->robot->update();
-        const auto& live_state = env->robot->data.live_state;
+        active_env = active_tracking_ ? env.get() : locomotion_env_.get();
+        if (!active_env) {
+            return;
+        }
+        active_env->robot->update();
+        const auto& live_state = active_env->robot->data.live_state;
         initial_yaw_bias_ = quat_to_yaw(
             live_state.root_quat_w.w(),
             live_state.root_quat_w.x(),
@@ -732,7 +1027,30 @@ void State_Track::enter()
 
 void State_Track::run()
 {
-    // One Track::run() call is one full 50Hz high-level cycle.
+    if (playback_complete_) {
+        return;
+    }
+
+    if (hybrid_locomotion_enabled_ && !active_tracking_) {
+        poll_motion_request_file();
+        if (auto requested_motion = consume_pending_motion_file()) {
+            stop_locomotion_policy_thread();
+            active_tracking_ = start_requested_motion(*requested_motion);
+            if (!active_tracking_ && locomotion_env_) {
+                start_locomotion_policy_thread();
+            }
+        }
+        if (!active_tracking_) {
+            run_locomotion_policy();
+            return;
+        }
+    }
+
+    run_tracking_policy();
+}
+
+void State_Track::run_tracking_policy()
+{
     env->robot->update();
     const auto& live_state = env->robot->data.live_state;
     const float current_root_yaw = quat_to_yaw(
@@ -766,7 +1084,8 @@ void State_Track::run()
     }
     const Eigen::Quaternionf current_root_quat_unbiased_used =
         (no_global_mode_ && has_initial_yaw_bias_) ? current_root_quat_used : live_state.root_quat_w;
-    reference_->update((env->episode_length + 1) * env->step_dt,
+    const float track_time_s = (env->episode_length + 1) * env->step_dt;
+    reference_->update(track_time_s,
                        no_global_mode_,
                        has_current_root_xy,
                        current_root_xy,
@@ -774,7 +1093,8 @@ void State_Track::run()
                        current_root_quat_used,
                        current_root_quat_unbiased_used,
                        use_motion_root_command_,
-                       use_motion_velocity_command_);
+                       use_motion_velocity_command_,
+                       !one_shot_mode_);
     env->episode_length += 1;
 
     // Override joint positions with reference motion for specified joints.
@@ -800,6 +1120,29 @@ void State_Track::run()
     const auto action = env->alg->act(obs);
     env->action_manager->process_action(action);
     auto target_q = env->action_manager->processed_actions();
+    if (env->episode_length <= 5) {
+        const auto& joint_pos = env->robot->data.joint_pos;
+        float max_abs_target_delta = 0.0f;
+        int max_delta_policy_joint = -1;
+        int max_delta_sdk_slot = -1;
+        const size_t joint_count = std::min(
+            static_cast<size_t>(joint_pos.size()),
+            target_q.size()
+        );
+        for (size_t i = 0; i < joint_count; ++i) {
+            const float delta = std::abs(target_q[i] - joint_pos[i]);
+            if (delta > max_abs_target_delta) {
+                max_abs_target_delta = delta;
+                max_delta_policy_joint = static_cast<int>(i);
+                max_delta_sdk_slot = env->robot->data.policy_joint_to_sdk_slot(static_cast<int>(i));
+            }
+        }
+        spdlog::info("Track: frame {} max |target_q-current_q| = {:.4f} rad at policy joint {}, sdk slot {}",
+                     env->episode_length,
+                     max_abs_target_delta,
+                     max_delta_policy_joint,
+                     max_delta_sdk_slot);
+    }
     dump_control_frame(obs, action, target_q);
     for (int i = 0; i < env->robot->data.joint_ids_map.size(); ++i) {
         const int sdk_slot = env->robot->data.policy_joint_to_sdk_slot(i);
@@ -818,11 +1161,299 @@ void State_Track::run()
         dump_first_frame_debug(obs, action, target_q);
         first_frame_debug_dumped_ = true;
     }
+
+    if (one_shot_mode_ && reference_ && track_time_s >= reference_->duration()) {
+        if (hybrid_locomotion_enabled_) {
+            active_tracking_ = false;
+            close_observation_dump();
+            if (locomotion_env_) {
+                locomotion_env_->reset();
+                start_locomotion_policy_thread();
+            }
+            spdlog::info("Track: one-shot playback complete at {:.3f}s, returning to hybrid locomotion", track_time_s);
+        } else {
+            playback_complete_ = true;
+            spdlog::info("Track: one-shot playback complete at {:.3f}s, returning to Velocity", track_time_s);
+        }
+    }
+}
+
+bool State_Track::poll_motion_request_file()
+{
+    if (request_file_.empty() || !std::filesystem::exists(request_file_)) {
+        return false;
+    }
+
+    std::ifstream input(request_file_);
+    std::string line;
+    std::getline(input, line);
+    input.close();
+
+    const auto request = parse_tracker_request_line(line);
+    if (request.motion_file.empty()) {
+        spdlog::warn("Track: ignored empty request file '{}'", request_file_.string());
+        std::error_code ec;
+        std::filesystem::remove(request_file_, ec);
+        return false;
+    }
+    if (request.has_profile && request.target_state != getStateString()) {
+        return false;
+    }
+
+    std::error_code ec;
+    std::filesystem::remove(request_file_, ec);
+
+    request_motion_file(request.motion_file);
+    return true;
+}
+
+bool State_Track::route_profile_request_to(const std::string& target_state)
+{
+    if (request_file_.empty() || !std::filesystem::exists(request_file_)) {
+        return false;
+    }
+
+    std::ifstream input(request_file_);
+    std::string line;
+    std::getline(input, line);
+    input.close();
+
+    const auto request = parse_tracker_request_line(line);
+    if (!request.has_profile || request.target_state != target_state || request.motion_file.empty()) {
+        return false;
+    }
+
+    std::error_code ec;
+    std::filesystem::remove(request_file_, ec);
+    request_motion_file(request.motion_file);
+    spdlog::info("Track: routed profile request from {} to {} with motion '{}'",
+                 getStateString(),
+                 target_state,
+                 request.motion_file);
+    return true;
+}
+
+bool State_Track::start_requested_motion(const std::filesystem::path& requested_motion)
+{
+    std::filesystem::path motion_file = requested_motion;
+    if (!motion_file.is_absolute()) {
+        motion_file = param::proj_dir / motion_file;
+    }
+    if (!std::filesystem::exists(motion_file)) {
+        spdlog::warn("Track: requested motion '{}' does not exist; staying in locomotion",
+                     motion_file.string());
+        return false;
+    }
+
+    std::error_code motion_ec;
+    std::error_code default_ec;
+    const auto canonical_motion = std::filesystem::weakly_canonical(motion_file, motion_ec);
+    const auto canonical_default = std::filesystem::weakly_canonical(default_motion_file_, default_ec);
+    const bool matches_configured_motion = !motion_ec && !default_ec && canonical_motion == canonical_default;
+    if (matches_configured_motion) {
+        if (require_requested_motion_) {
+            spdlog::warn("Track: requested motion '{}' equals configured fallback motion_file; rejecting request",
+                         motion_file.string());
+            return false;
+        }
+        spdlog::info("Track: requested motion '{}' equals configured motion_file; running configured motion",
+                     motion_file.string());
+    }
+
+    spdlog::info("Track: loading requested motion '{}'", motion_file.string());
+    reference_ = std::make_shared<ReferenceLoader>(motion_file, reference_fps_);
+    reference = reference_;
+    reference_->reset(env->robot->data.default_joint_pos);
+    env->reset();
+    reset_pd_gain_scales();
+    initialize_policy_motors(env.get(), policy_kp_, policy_kd_, true);
+    for (int i = 0; i < env->robot->data.joint_ids_map.size(); ++i) {
+        const int sdk_slot = env->robot->data.policy_joint_to_sdk_slot(i);
+        if (sdk_slot < 0 || sdk_slot >= static_cast<int>(lowcmd->msg_.motor_cmd().size())) {
+            continue;
+        }
+        auto& motor = lowcmd->msg_.motor_cmd()[sdk_slot];
+        motor.q() = env->robot->data.default_joint_pos[i];
+    }
+    apply_head_hold_command();
+    has_initial_yaw_bias_ = false;
+    initial_yaw_bias_ = 0.0f;
+    if (no_global_mode_) {
+        env->robot->update();
+        const auto& live_state = env->robot->data.live_state;
+        initial_yaw_bias_ = quat_to_yaw(
+            live_state.root_quat_w.w(),
+            live_state.root_quat_w.x(),
+            live_state.root_quat_w.y(),
+            live_state.root_quat_w.z()
+        );
+        has_initial_yaw_bias_ = true;
+        spdlog::info("Track: requested motion yaw-zero bias reset: {:.6f} rad", initial_yaw_bias_);
+    }
+    open_observation_dump();
+    return true;
+}
+
+void State_Track::run_locomotion_policy()
+{
+    if (!locomotion_env_) {
+        return;
+    }
+    write_policy_action(
+        locomotion_env_->action_manager->processed_actions(),
+        locomotion_policy_kp_,
+        locomotion_policy_kd_,
+        locomotion_env_.get()
+    );
+    apply_hybrid_idle_hold();
+}
+
+void State_Track::initialize_policy_motors(isaaclab::ManagerBasedRLEnv* policy_env,
+                                           const std::vector<float>& kp,
+                                           const std::vector<float>& kd,
+                                           bool clear_uncontrolled_motors)
+{
+    const int motor_cmd_count = static_cast<int>(lowcmd->msg_.motor_cmd().size());
+    if (clear_uncontrolled_motors) {
+        for (int i = 0; i < motor_cmd_count; ++i) {
+            auto& motor = lowcmd->msg_.motor_cmd()[i];
+            motor.kp() = 0.0f;
+            motor.kd() = 0.0f;
+            motor.dq() = 0.0f;
+            motor.tau() = 0.0f;
+        }
+    }
+
+    if (!policy_env) {
+        return;
+    }
+
+    const size_t joint_count = std::min({
+        policy_env->robot->data.joint_ids_map.size(),
+        kp.size(),
+        kd.size()
+    });
+
+    for (size_t i = 0; i < joint_count; ++i) {
+        const int sdk_slot = policy_env->robot->data.policy_joint_to_sdk_slot(i);
+        if (sdk_slot < 0 || sdk_slot >= motor_cmd_count) {
+            continue;
+        }
+
+        auto& motor = lowcmd->msg_.motor_cmd()[sdk_slot];
+        motor.mode() = 1;
+        motor.dq() = 0.0f;
+        motor.kp() = kp[i];
+        motor.kd() = kd[i];
+        motor.tau() = 0.0f;
+    }
+}
+
+void State_Track::apply_hybrid_idle_hold()
+{
+    if (!hybrid_locomotion_enabled_ || active_tracking_ || !locomotion_env_) {
+        return;
+    }
+
+    const int motor_cmd_count = static_cast<int>(lowcmd->msg_.motor_cmd().size());
+    std::vector<bool> locomotion_controlled(motor_cmd_count, false);
+    for (size_t i = 0; i < locomotion_env_->robot->data.joint_ids_map.size(); ++i) {
+        const int sdk_slot = locomotion_env_->robot->data.policy_joint_to_sdk_slot(i);
+        if (sdk_slot >= 0 && sdk_slot < motor_cmd_count) {
+            locomotion_controlled[sdk_slot] = true;
+        }
+    }
+
+    const size_t hold_count = std::min({
+        static_cast<size_t>(motor_cmd_count),
+        hybrid_idle_hold_q_.size(),
+        hybrid_idle_hold_kp_.size(),
+        hybrid_idle_hold_kd_.size()
+    });
+    for (size_t sdk_slot = 0; sdk_slot < hold_count; ++sdk_slot) {
+        if (locomotion_controlled[sdk_slot]) {
+            continue;
+        }
+        if (hybrid_idle_hold_kp_[sdk_slot] == 0.0f && hybrid_idle_hold_kd_[sdk_slot] == 0.0f) {
+            continue;
+        }
+
+        auto& motor = lowcmd->msg_.motor_cmd()[sdk_slot];
+        motor.mode() = 1;
+        motor.q() = hybrid_idle_hold_q_[sdk_slot];
+        motor.dq() = 0.0f;
+        motor.kp() = hybrid_idle_hold_kp_[sdk_slot];
+        motor.kd() = hybrid_idle_hold_kd_[sdk_slot];
+        motor.tau() = 0.0f;
+    }
+}
+
+void State_Track::write_policy_action(const std::vector<float>& action,
+                                      const std::vector<float>& kp,
+                                      const std::vector<float>& kd,
+                                      isaaclab::ManagerBasedRLEnv* policy_env)
+{
+    if (!policy_env) {
+        return;
+    }
+    const int motor_cmd_count = static_cast<int>(lowcmd->msg_.motor_cmd().size());
+    const size_t joint_count = std::min({
+        policy_env->robot->data.joint_ids_map.size(),
+        action.size(),
+        kp.size(),
+        kd.size()
+    });
+
+    for (size_t i = 0; i < joint_count; ++i) {
+        const int sdk_slot = policy_env->robot->data.policy_joint_to_sdk_slot(i);
+        if (sdk_slot < 0 || sdk_slot >= motor_cmd_count) {
+            continue;
+        }
+
+        auto& motor = lowcmd->msg_.motor_cmd()[sdk_slot];
+        motor.mode() = 1;
+        motor.q() = action[i];
+        motor.dq() = 0.0f;
+        motor.kp() = kp[i];
+        motor.kd() = kd[i];
+        motor.tau() = 0.0f;
+    }
+    apply_head_hold_command();
+}
+
+void State_Track::start_locomotion_policy_thread()
+{
+    if (!hybrid_locomotion_enabled_ || !locomotion_env_ || locomotion_policy_thread_running_) {
+        return;
+    }
+
+    locomotion_policy_thread_running_ = true;
+    locomotion_policy_thread_ = std::thread([this] {
+        using clock = std::chrono::high_resolution_clock;
+        const auto dt = std::chrono::duration_cast<clock::duration>(
+            std::chrono::duration<double>(locomotion_env_->step_dt));
+
+        auto sleep_till = clock::now() + dt;
+        while (locomotion_policy_thread_running_) {
+            locomotion_env_->step();
+            std::this_thread::sleep_until(sleep_till);
+            sleep_till += dt;
+        }
+    });
+}
+
+void State_Track::stop_locomotion_policy_thread()
+{
+    locomotion_policy_thread_running_ = false;
+    if (locomotion_policy_thread_.joinable()) {
+        locomotion_policy_thread_.join();
+    }
 }
 
 void State_Track::exit()
 {
     spdlog::info("Track: exit");
+    stop_locomotion_policy_thread();
     close_observation_dump();
 }
 
