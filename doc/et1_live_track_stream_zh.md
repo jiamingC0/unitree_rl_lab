@@ -95,11 +95,15 @@ ref_com_vel_navi[3]        # 可选，reference COM velocity 的导航系表达
 --live_topic et1_track
 ```
 
-因此通常不需要手动指定。发布端会在 50Hz KPTS frame release 后立刻打包 ZMQ payload，首帧带 reset flag，后续 sequence 递增。
+因此通常不需要手动指定。发布端会在上游产出新的可用 50Hz reference frame 后立刻打包 ZMQ payload，首帧带 reset flag，后续 sequence 递增。
 
-`--no-run_scaletrack_policy` 只是不在 GMR 端额外跑本地 ScaleTrack rollout 仿真。它不会关闭 ZMQ 发布。部署联调时通常应使用这个参数，因为 deploy 端会自己运行 `GeneralTrackerCJM/CLN` policy。
+`--no-run_scaletrack_policy` 表示不在 GMR 端运行本地 ScaleTrack rollout。此时发布端将原始 50Hz KPTS 作为 reference motion 流式发送给 deploy。它不会关闭 ZMQ 发布。
 
-如果保留默认 `--run_scaletrack_policy`，脚本会一边发布同一份 50Hz reference 给 deploy，一边在 GMR 端做本地 ScaleTrack rollout 并保存 rollout NPZ。两者是并行的，ZMQ PUB 仍然发送 reference motion，不发送本地 rollout 的 action。
+如果保留默认 `--run_scaletrack_policy`，ScaleTrack 作为在线洗数据工具存在。脚本先将原始 KPTS 喂给本地 ScaleTrack rollout；每当 rollout 产出新的状态帧，就立即将洗过的 `joint_pos`、`joint_vel`、root 状态、脚接触状态和 COM 信息重新包装为 reference motion，通过 ZMQ 发送给 deploy。ScaleTrack 需要未来 reference 帧，因此该模式带有固定延迟。
+
+两种模式下，deploy 收到的都仍然是 reference motion。deploy 端继续运行 `GeneralTrackerCJM` 或 `GeneralTrackerCLN` tracker policy，再输出实际控制命令。ZMQ 不发送本地 ScaleTrack 的原始 ONNX action，也不直接发送 `lowcmd`。
+
+默认推荐保留 `--run_scaletrack_policy`，使用洗过的 reference motion。需要绕过清洗阶段做对照测试时，再显式添加 `--no-run_scaletrack_policy`。
 
 ## 历史/未来帧预留
 
