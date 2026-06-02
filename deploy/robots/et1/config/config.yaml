@@ -275,6 +275,11 @@ FSM:
     policy_file: self_collision_footmesh_15k.onnx
     deploy_file: deploy.yaml
     motion_file: config/policy/general_tracker/params/walk-2_et1_kpts.et1trk
+    live_stream:
+      enabled: true
+      endpoint: tcp://127.0.0.1:5557
+      topic: et1_track
+      max_queue_frames: 2000
     one_shot_mode: true
     require_requested_motion: false
     hybrid_locomotion: false
@@ -300,6 +305,11 @@ FSM:
     policy_file: multi_policy_v17_2.onnx
     deploy_file: deploy.yaml
     motion_file: config/policy/general_tracker_cln/params/walk-cln-1_et1.et1trk
+    live_stream:
+      enabled: true
+      endpoint: tcp://127.0.0.1:5557
+      topic: et1_track
+      max_queue_frames: 2000
     one_shot_mode: true
     require_requested_motion: false
     hybrid_locomotion: false
