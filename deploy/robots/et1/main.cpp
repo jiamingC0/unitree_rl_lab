@@ -9,6 +9,7 @@
 
 #include <chrono>
 #include <cstring>
+#include <filesystem>
 #include <optional>
 #include <string>
 #include <thread>
@@ -23,6 +24,31 @@ std::unique_ptr<LowCmd_t> FSMState::lowcmd = nullptr;
 std::shared_ptr<LowState_t> FSMState::lowstate = nullptr;
 std::shared_ptr<HighState_t> FSMState::highstate = nullptr;
 std::shared_ptr<Keyboard> FSMState::keyboard = std::make_shared<Keyboard>();
+
+void clear_stale_general_tracker_request()
+{
+    const auto tracker_cfg = param::config["FSM"]["GeneralTracker"];
+    if (!tracker_cfg) {
+        return;
+    }
+
+    std::filesystem::path request_file = tracker_cfg["request_file"]
+        ? tracker_cfg["request_file"].as<std::string>()
+        : "debug/general_tracker_request.txt";
+    if (!request_file.is_absolute()) {
+        request_file = param::proj_dir / request_file;
+    }
+
+    std::error_code ec;
+    const bool removed = std::filesystem::remove(request_file, ec);
+    if (ec) {
+        spdlog::warn("Failed to clear stale GeneralTracker request '{}': {}",
+                     request_file.string(),
+                     ec.message());
+    } else if (removed) {
+        spdlog::info("Cleared stale GeneralTracker request '{}'", request_file.string());
+    }
+}
 
 void init_fsm_state()
 {
@@ -84,6 +110,7 @@ bool sim_status_has_both_feet_contact(const std::string& status)
 int main(int argc, char** argv)
 {
     auto vm = param::helper(argc, argv);
+    clear_stale_general_tracker_request();
 
     std::cout << " --- Unitree Robotics --- \n";
     std::cout << "     ET1 Controller \n";
