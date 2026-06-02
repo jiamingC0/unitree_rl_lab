@@ -133,6 +133,11 @@ FSM:
       NoHeadPokerFace: "6"
       GeneralTrackerCLN: "9"
     policy_dir: config/policy/velocity/v0
+    live_stream_trigger:
+      enabled: true
+      endpoint: tcp://127.0.0.1:5557
+      topic: et1_track
+      target_state: GeneralTrackerCJM
 
   JointTest:
     transitions:
@@ -246,13 +251,17 @@ FSM:
     deploy_file: deploy.yaml
     motion_file: config/policy/general_tracker/params/PokerFace004_et1_1.et1trk  # fallback only; one-shot requests must specify another file
     request_file: debug/general_tracker_request.txt
+    live_stream:
+      enabled: false
+      endpoint: tcp://127.0.0.1:5557
+      topic: et1_track
+      max_queue_frames: 2000
     one_shot_mode: true
     require_requested_motion: true
     hybrid_locomotion: true
     locomotion_policy_dir: config/policy/velocity/v0
     locomotion_policy_file: policy.onnx
     locomotion_deploy_file: deploy.yaml
-    fps: 50
     no_global_mode: true
     use_motion_root_command: true
     use_motion_velocity_command: true
@@ -283,7 +292,6 @@ FSM:
     one_shot_mode: true
     require_requested_motion: false
     hybrid_locomotion: false
-    fps: 50
     no_global_mode: true
     use_motion_root_command: true
     use_motion_velocity_command: true
@@ -313,7 +321,6 @@ FSM:
     one_shot_mode: true
     require_requested_motion: false
     hybrid_locomotion: false
-    fps: 50
     no_global_mode: true
     use_motion_root_command: true
     use_motion_velocity_command: true
@@ -336,7 +343,6 @@ FSM:
     policy_file: policy.onnx
     deploy_file: deploy.yaml
     motion_file: config/policy/dance/wind_summer/params/wind_summer.et1trk
-    fps: 50
     no_global_mode: true
     use_motion_root_command: true
     use_motion_velocity_command: false
@@ -357,7 +363,6 @@ FSM:
     policy_file: policy.onnx
     deploy_file: deploy.yaml
     motion_file: config/policy/dance/poker_face/params/poker_face.et1trk
-    fps: 50
     no_global_mode: true
     use_motion_root_command: false
     use_motion_velocity_command: false
@@ -379,7 +384,6 @@ FSM:
     policy_file: sdkpd_foot_mesh_identified_robust.onnx
     deploy_file: deploy.yaml
     motion_file: config/policy/dance/nohead_poker_face_com/params/poker_face.et1trk
-    fps: 50
     no_global_mode: true
     use_motion_root_command: true
     use_motion_velocity_command: true

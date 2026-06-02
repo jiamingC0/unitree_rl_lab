@@ -28,6 +28,19 @@ topic: et1_track
 rate: 50Hz
 ```
 
+`Velocity` 状态会常驻监听同一 ZMQ topic。收到合法的 `ET1LIVE1` reset 首帧后，控制器自动从 `Velocity` 切换到配置的 tracker 状态；没有新轨迹时继续保持 `Velocity`：
+
+```yaml
+Velocity:
+  live_stream_trigger:
+    enabled: true
+    endpoint: tcp://127.0.0.1:5557
+    topic: et1_track
+    target_state: GeneralTrackerCJM
+```
+
+将 `target_state` 改成 `GeneralTrackerCLN` 即可自动切换到 CLN tracker。键盘 `3` 和 `9` 仍保留为手工调试入口，但正常流式链路不再要求手工切换状态。
+
 启动预缓冲不需要手写配置。控制端会根据 policy deploy 配置自动推断：如果 observation 使用 `future_commands`，默认需要未来 25 帧，因此执行 frame 0 前会等待队列里已有 frame 0..25；如果 `future_commands.params.horizon` 明确配置了其他值，则按该值等待 `horizon + 1` 帧；如果没有使用 `future_commands`，只等待当前帧。发布频率高于控制端消费频率时，控制端会按 policy deploy yaml 的 `step_dt` 节奏从队列取帧；队列超过 `max_queue_frames` 时丢弃最老帧。
 
 ## ZMQ 消息
