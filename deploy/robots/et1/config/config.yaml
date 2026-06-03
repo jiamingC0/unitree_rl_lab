@@ -138,7 +138,7 @@ FSM:
       enabled: true
       endpoint: tcp://127.0.0.1:5557
       topic: et1_track
-      target_state: GeneralTrackerCJM
+      target_state: GeneralTrackerCLN
 
   JointTest:
     transitions:
@@ -312,7 +312,7 @@ FSM:
       Dance2: "5"
       NoHeadPokerFace: "6"
     policy_dir: config/policy/general_tracker_cln
-    policy_file: multi_policy_v17_2.onnx
+    policy_file: multi_policy_v17c2_70k.onnx
     deploy_file: deploy.yaml
     motion_file: config/policy/general_tracker_cln/params/walk-cln-1_et1.et1trk
     live_stream:
