@@ -133,7 +133,7 @@ FSM:
       Dance2: "5"
       NoHeadPokerFace: "6"
       GeneralTrackerCLN: "9"
-    policy_dir: config/policy/velocity/v0
+    policy_dir: config/policy/velocity/et1_v0
     live_stream_trigger:
       enabled: true
       endpoint: tcp://127.0.0.1:5557
@@ -260,7 +260,7 @@ FSM:
     one_shot_mode: true
     require_requested_motion: true
     hybrid_locomotion: true
-    locomotion_policy_dir: config/policy/velocity/v0
+    locomotion_policy_dir: config/policy/velocity/et1_v0
     locomotion_policy_file: policy.onnx
     locomotion_deploy_file: deploy.yaml
     no_global_mode: true
