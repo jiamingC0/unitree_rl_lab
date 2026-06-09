@@ -1461,6 +1461,12 @@ State_Track::State_Track(int state_mode, std::string state_string)
     // Temporarily disable bad_orientation-triggered state switch in Track.
 }
 
+long long State_Track::active_motion_duration_ms() const
+{
+    const float duration_s = reference_ ? std::max(0.0f, reference_->duration()) : 0.0f;
+    return static_cast<long long>(std::round(duration_s * 1000.0f));
+}
+
 void State_Track::enter()
 {
     spdlog::info("Track: enter");
@@ -1470,8 +1476,51 @@ void State_Track::enter()
     first_frame_debug_dumped_ = false;
     playback_complete_ = false;
     active_tracking_ = false;
+    active_app_request_ = false;
+    active_app_command_ = Et1DanceCommand{};
 
-    if (auto requested_motion = consume_pending_motion_file()) {
+    Et1DanceCommand app_command;
+    if (param::is_app_dance_debug_mode()
+        && getStateString() == "GeneralTracker"
+        && Et1DanceBridge::Instance().ConsumeStart(app_command)) {
+        active_app_command_ = app_command;
+        active_app_request_ = true;
+        try {
+            active_tracking_ = start_requested_motion(app_command.motion_path);
+            if (active_tracking_) {
+                Et1DanceBridge::Instance().PublishStatusWithProgress(
+                    active_app_command_.request_id,
+                    active_app_command_.dance_id,
+                    "play_start",
+                    active_motion_duration_ms(),
+                    0,
+                    0.0,
+                    active_app_command_.motion_path);
+            } else {
+                Et1DanceBridge::Instance().PublishStatus(
+                    active_app_command_.request_id,
+                    active_app_command_.dance_id,
+                    "play_failed",
+                    "failed to load requested ET1 track motion");
+                active_app_request_ = false;
+            }
+        } catch (const std::exception& e) {
+            Et1DanceBridge::Instance().PublishStatus(
+                active_app_command_.request_id,
+                active_app_command_.dance_id,
+                "play_failed",
+                e.what());
+            spdlog::error("Track: failed to load app requested motion '{}': {}",
+                          app_command.motion_path,
+                          e.what());
+            active_app_request_ = false;
+            active_tracking_ = false;
+        }
+        if (!active_tracking_ && !hybrid_locomotion_enabled_) {
+            playback_complete_ = true;
+            return;
+        }
+    } else if (auto requested_motion = consume_pending_motion_file()) {
         active_tracking_ = start_requested_motion(*requested_motion);
         if (!active_tracking_ && !hybrid_locomotion_enabled_) {
             playback_complete_ = true;
@@ -1536,6 +1585,33 @@ void State_Track::enter()
 void State_Track::run()
 {
     if (playback_complete_) {
+        return;
+    }
+
+    Et1DanceCommand stop_command;
+    if (active_app_request_
+        && Et1DanceBridge::Instance().ConsumeStop(stop_command)
+        && active_tracking_) {
+        Et1DanceBridge::Instance().PublishStatus(
+            stop_command.request_id.empty() ? active_app_command_.request_id : stop_command.request_id,
+            stop_command.dance_id != 0 ? stop_command.dance_id : active_app_command_.dance_id,
+            "play_stopping");
+        active_tracking_ = false;
+        close_observation_dump();
+        if (hybrid_locomotion_enabled_ && locomotion_env_) {
+            locomotion_env_->reset();
+            start_locomotion_policy_thread();
+        } else {
+            playback_complete_ = true;
+        }
+        Et1DanceBridge::Instance().PublishStatusWithProgress(
+            stop_command.request_id.empty() ? active_app_command_.request_id : stop_command.request_id,
+            stop_command.dance_id != 0 ? stop_command.dance_id : active_app_command_.dance_id,
+            "play_stopped",
+            active_motion_duration_ms(),
+            active_motion_duration_ms(),
+            1.0);
+        active_app_request_ = false;
         return;
     }
 
@@ -1671,6 +1747,16 @@ void State_Track::run_tracking_policy()
     }
 
     if (one_shot_mode_ && reference_ && track_time_s >= reference_->duration()) {
+        if (active_app_request_) {
+            Et1DanceBridge::Instance().PublishStatusWithProgress(
+                active_app_command_.request_id,
+                active_app_command_.dance_id,
+                "play_finished",
+                active_motion_duration_ms(),
+                active_motion_duration_ms(),
+                1.0);
+            active_app_request_ = false;
+        }
         if (hybrid_locomotion_enabled_) {
             active_tracking_ = false;
             close_observation_dump();
