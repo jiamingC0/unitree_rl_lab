@@ -16,6 +16,7 @@
 #include <vector>
 
 #include "FSM/State_RLBase.h"
+#include "Et1DanceBridge.h"
 
 class State_Track : public FSMState
 {
@@ -218,6 +219,7 @@ private:
     void reset_pd_gain_scales();
     bool poll_motion_request_file();
     bool route_profile_request_to(const std::string& target_state);
+    bool consume_app_start_request();
     bool start_requested_motion(const std::filesystem::path& motion_file);
     void run_tracking_policy();
     void run_locomotion_policy();
@@ -232,6 +234,7 @@ private:
     void apply_hybrid_idle_hold();
     void start_locomotion_policy_thread();
     void stop_locomotion_policy_thread();
+    long long active_motion_duration_ms() const;
 
     std::unique_ptr<isaaclab::ManagerBasedRLEnv> env;
     std::unique_ptr<isaaclab::ManagerBasedRLEnv> locomotion_env_;
@@ -285,6 +288,8 @@ private:
     std::vector<std::vector<float>> startup_upper_body_interp_qs_;
     bool observation_dump_enabled_ = false;
     bool live_stream_enabled_ = false;
+    Et1DanceCommand active_app_command_;
+    bool active_app_request_ = false;
     std::filesystem::path observation_dump_base_file_;
     std::filesystem::path observation_dump_file_;
     std::ofstream observation_dump_stream_;
