@@ -152,3 +152,11 @@ This repository is built upon the support and contributions of the following ope
 - [mujoco](https://github.com/google-deepmind/mujoco.git): Providing powerful simulation functionalities.
 - [robot_lab](https://github.com/fan-ziqi/robot_lab): Referenced for project structure and parts of the implementation.
 - [whole_body_tracking](https://github.com/HybridRobotics/whole_body_tracking): Versatile humanoid control framework for motion tracking.
+
+
+轨迹转换
+```bash
+python3 unitree_rl_lab/scripts/et1/convert_track_npz.py \
+    --input /home/galbot/galbot_rl_mjlab/src/mjlab/storage/mocap/general_tracker_test_footstate/585_jiaxin.npz \
+    --output /home/galbot/ET_Deploy/unitree_rl_lab/deploy/robots/et1/config/policy/general_tracker_cln/params/585_jiaxin.et1trk 
+   ```
