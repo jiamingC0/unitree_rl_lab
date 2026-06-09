@@ -312,9 +312,9 @@ FSM:
       Dance2: "5"
       NoHeadPokerFace: "6"
     policy_dir: config/policy/general_tracker_cln
-    policy_file: multi_policy_v17c2_70k.onnx
-    deploy_file: deploy.yaml
-    motion_file: config/policy/general_tracker_cln/params/walk-cln-1_et1.et1trk
+    policy_file: multi_policy_footstate3.onnx
+    deploy_file: deploy_fut_multi_footstate.yaml
+    motion_file: config/policy/general_tracker_cln/params/585_jiaxin.et1trk
     live_stream:
       enabled: true
       endpoint: tcp://127.0.0.1:5557
@@ -324,10 +324,12 @@ FSM:
     require_requested_motion: false
     hybrid_locomotion: false
     no_global_mode: true
-    use_motion_root_command: true
-    use_motion_velocity_command: true
+    use_motion_root_command: false
+    use_motion_velocity_command: false
     debug_dump_first_frame: false
     debug_dump_dir: debug/et1_general_tracker_cln_first_frame
+    dump_qpos_visualizer: false
+    qpos_visualizer_dump_file: debug/qpos_visualizer/general_tracker_cln_qpos_visualizer.csv
 
   Dance1:
     transitions:
