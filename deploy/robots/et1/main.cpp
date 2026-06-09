@@ -32,7 +32,7 @@ std::shared_ptr<Keyboard> FSMState::keyboard = std::make_shared<Keyboard>();
 
 void clear_stale_general_tracker_request()
 {
-    const auto tracker_cfg = param::config["FSM"]["GeneralTracker"];
+    const auto tracker_cfg = param::config["FSM"]["GeneralTrackerCJM"];
     if (!tracker_cfg) {
         return;
     }
@@ -47,11 +47,11 @@ void clear_stale_general_tracker_request()
     std::error_code ec;
     const bool removed = std::filesystem::remove(request_file, ec);
     if (ec) {
-        spdlog::warn("Failed to clear stale GeneralTracker request '{}': {}",
+        spdlog::warn("Failed to clear stale tracker request '{}': {}",
                      request_file.string(),
                      ec.message());
     } else if (removed) {
-        spdlog::info("Cleared stale GeneralTracker request '{}'", request_file.string());
+        spdlog::info("Cleared stale tracker request '{}'", request_file.string());
     }
 }
 
@@ -211,10 +211,10 @@ int main(int argc, char** argv)
     if (param::is_app_dance_debug_mode()) {
         for (auto& state : fsm->states) {
             const std::string name = state->getStateString();
-            if (name == "Velocity" && FSMStringMap.right.count("GeneralTracker")) {
+            if (name == "Velocity" && FSMStringMap.right.count("GeneralTrackerCLN")) {
                 state->registered_checks.push_back({
                     []() -> bool { return Et1DanceBridge::Instance().HasPendingStart(); },
-                    FSMStringMap.right.at("GeneralTracker"),
+                    FSMStringMap.right.at("GeneralTrackerCLN"),
                     "ET1 app dance start"
                 });
             } else if ((name == "Passive" || name == "FixStand") && FSMStringMap.right.count("Velocity")) {
@@ -276,9 +276,9 @@ int main(int argc, char** argv)
         }).detach();
     }
 
-    std::cout << "Keyboard: [1] FixStand, [2] Velocity, [3] GeneralTrackerCJM, [4] Dance1/Wind Summer, [5] Dance2/PokerFace, [6] NoHeadPokerFace, [7] JointTest, [8] JointStepTest, [9] GeneralTrackerCLN, [0] Passive.\n";
+    std::cout << "Keyboard: [1] FixStand, [2] Velocity, [3] GeneralTrackerCJM[test], [4] Dance1/Wind Summer, [5] Dance2/PokerFace, [6] NoHeadPokerFace, [7] JointTest, [8] JointStepTest, [9] GeneralTrackerCLN[master], [0] Passive.\n";
     std::cout << "Sim2Sim: add --sim-auto to enter FixStand, lower MuJoCo's elastic band, wait for foot contact, enter Velocity, then release the band. Real robot deployment remains manual.\n";
-    std::cout << "Joystick: FixStand [LT+Up], Velocity [RB+X], GeneralTracker hybrid [LT(2s)+Up], Dance1 [LT(2s)+Down], Dance2 [LT(2s)+Right], NoHeadPokerFace [LT(2s)+Left]. Tracker requests use debug/general_tracker_request.txt; prefix with cjm/cln to route profiles.\n";
+    std::cout << "Joystick: FixStand [LT+Up], Velocity [RB+X], GeneralTrackerCLN[master] [LT(2s)+Up], Dance1 [LT(2s)+Down], Dance2 [LT(2s)+Right], NoHeadPokerFace [LT(2s)+Left]. Tracker requests use debug/general_tracker_request.txt; prefix with cjm[test]/cln[master] to route profiles.\n";
 
     while (true)
     {

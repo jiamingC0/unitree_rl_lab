@@ -99,10 +99,10 @@ std::string trim_copy(const std::string& value)
 std::string tracker_target_from_token(const std::string& token)
 {
     static const std::unordered_map<std::string, std::string> aliases = {
-        {"general", "GeneralTracker"},
-        {"tracker", "GeneralTracker"},
-        {"generaltracker", "GeneralTracker"},
-        {"GeneralTracker", "GeneralTracker"},
+        {"general", "GeneralTrackerCLN"},
+        {"tracker", "GeneralTrackerCLN"},
+        {"generaltracker", "GeneralTrackerCLN"},
+        {"GeneralTracker", "GeneralTrackerCLN"},
         {"debug", "GeneralTrackerCJM"},
         {"cjm", "GeneralTrackerCJM"},
         {"general_tracker_cjm", "GeneralTrackerCJM"},
@@ -137,7 +137,7 @@ TrackerRequestLine parse_tracker_request_line(const std::string& raw_line)
     ss >> first_token;
     request.target_state = tracker_target_from_token(first_token);
     if (request.target_state.empty()) {
-        request.target_state = "GeneralTracker";
+        request.target_state = "GeneralTrackerCLN";
         request.motion_file = line;
         request.has_profile = false;
         return request;
@@ -1664,7 +1664,6 @@ State_Track::State_Track(int state_mode, std::string state_string)
     }
 
     const std::vector<std::string> tracker_targets = {
-        "GeneralTracker",
         "GeneralTrackerCJM",
         "GeneralTrackerCLN",
     };
@@ -1698,7 +1697,7 @@ long long State_Track::active_motion_duration_ms() const
 
 bool State_Track::consume_app_start_request()
 {
-    if (!param::is_app_dance_debug_mode() || getStateString() != "GeneralTracker") {
+    if (!param::is_app_dance_debug_mode() || getStateString() != "GeneralTrackerCLN") {
         return false;
     }
 
@@ -1792,7 +1791,7 @@ void State_Track::enter()
         reference = reference_;
         active_tracking_ = true;
     } else if (require_requested_motion_ && !hybrid_locomotion_enabled_) {
-        spdlog::warn("Track: no requested motion is pending; GeneralTracker will return to Velocity without running fallback motion_file");
+        spdlog::warn("Track: no requested motion is pending; tracker will return to Velocity without running fallback motion_file");
         playback_complete_ = true;
         return;
     } else if (!hybrid_locomotion_enabled_) {
