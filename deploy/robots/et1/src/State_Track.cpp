@@ -1467,6 +1467,57 @@ long long State_Track::active_motion_duration_ms() const
     return static_cast<long long>(std::round(duration_s * 1000.0f));
 }
 
+bool State_Track::consume_app_start_request()
+{
+    if (!param::is_app_dance_debug_mode() || getStateString() != "GeneralTracker") {
+        return false;
+    }
+
+    Et1DanceCommand app_command;
+    if (!Et1DanceBridge::Instance().ConsumeStart(app_command)) {
+        return false;
+    }
+
+    stop_locomotion_policy_thread();
+    active_app_command_ = app_command;
+    active_app_request_ = true;
+    active_tracking_ = false;
+
+    try {
+        active_tracking_ = start_requested_motion(app_command.motion_path);
+        if (active_tracking_) {
+            Et1DanceBridge::Instance().PublishStatusWithProgress(
+                active_app_command_.request_id,
+                active_app_command_.dance_id,
+                "play_start",
+                active_motion_duration_ms(),
+                0,
+                0.0,
+                active_app_command_.motion_path);
+            spdlog::info("Track: app requested motion started; waiting for playback completion before returning to idle");
+        } else {
+            Et1DanceBridge::Instance().PublishStatus(
+                active_app_command_.request_id,
+                active_app_command_.dance_id,
+                "play_failed",
+                "failed to load requested ET1 track motion");
+            active_app_request_ = false;
+        }
+    } catch (const std::exception& e) {
+        Et1DanceBridge::Instance().PublishStatus(
+            active_app_command_.request_id,
+            active_app_command_.dance_id,
+            "play_failed",
+            e.what());
+        spdlog::error("Track: failed to load app requested motion '{}': {}",
+                      app_command.motion_path,
+                      e.what());
+        active_app_request_ = false;
+        active_tracking_ = false;
+    }
+    return true;
+}
+
 void State_Track::enter()
 {
     spdlog::info("Track: enter");
@@ -1479,43 +1530,7 @@ void State_Track::enter()
     active_app_request_ = false;
     active_app_command_ = Et1DanceCommand{};
 
-    Et1DanceCommand app_command;
-    if (param::is_app_dance_debug_mode()
-        && getStateString() == "GeneralTracker"
-        && Et1DanceBridge::Instance().ConsumeStart(app_command)) {
-        active_app_command_ = app_command;
-        active_app_request_ = true;
-        try {
-            active_tracking_ = start_requested_motion(app_command.motion_path);
-            if (active_tracking_) {
-                Et1DanceBridge::Instance().PublishStatusWithProgress(
-                    active_app_command_.request_id,
-                    active_app_command_.dance_id,
-                    "play_start",
-                    active_motion_duration_ms(),
-                    0,
-                    0.0,
-                    active_app_command_.motion_path);
-            } else {
-                Et1DanceBridge::Instance().PublishStatus(
-                    active_app_command_.request_id,
-                    active_app_command_.dance_id,
-                    "play_failed",
-                    "failed to load requested ET1 track motion");
-                active_app_request_ = false;
-            }
-        } catch (const std::exception& e) {
-            Et1DanceBridge::Instance().PublishStatus(
-                active_app_command_.request_id,
-                active_app_command_.dance_id,
-                "play_failed",
-                e.what());
-            spdlog::error("Track: failed to load app requested motion '{}': {}",
-                          app_command.motion_path,
-                          e.what());
-            active_app_request_ = false;
-            active_tracking_ = false;
-        }
+    if (consume_app_start_request()) {
         if (!active_tracking_ && !hybrid_locomotion_enabled_) {
             playback_complete_ = true;
             return;
@@ -1616,12 +1631,20 @@ void State_Track::run()
     }
 
     if (hybrid_locomotion_enabled_ && !active_tracking_) {
-        poll_motion_request_file();
-        if (auto requested_motion = consume_pending_motion_file()) {
-            stop_locomotion_policy_thread();
-            active_tracking_ = start_requested_motion(*requested_motion);
+        if (consume_app_start_request()) {
             if (!active_tracking_ && locomotion_env_) {
                 start_locomotion_policy_thread();
+            }
+        } else {
+            poll_motion_request_file();
+        }
+        if (!active_tracking_ && !active_app_request_) {
+            if (auto requested_motion = consume_pending_motion_file()) {
+                stop_locomotion_policy_thread();
+                active_tracking_ = start_requested_motion(*requested_motion);
+                if (!active_tracking_ && locomotion_env_) {
+                    start_locomotion_policy_thread();
+                }
             }
         }
         if (!active_tracking_) {

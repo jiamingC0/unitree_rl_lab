@@ -96,12 +96,16 @@ void init_fsm_state()
 
 void release_lowcmd_channel_with_loco_handover()
 {
+    spdlog::info("Lowcmd handover flow: R1 LocoClient StandUp/Damp + MotionSwitcher fallback");
     spdlog::info("Initializing high-level LocoClient for lowcmd handover...");
     unitree::robot::r1::LocoClient loco_client;
     loco_client.Init();
     int fsm_id = -1;
-    if (loco_client.GetFsmId(fsm_id) == 0) {
+    int32_t fsm_result = loco_client.GetFsmId(fsm_id);
+    if (fsm_result == 0) {
         spdlog::info("LocoClient current FSM id before handover: {}", fsm_id);
+    } else {
+        spdlog::warn("LocoClient GetFsmId before handover returned {}", fsm_result);
     }
 
     spdlog::info("Commanding robot to StandUp before lowcmd takeover...");
@@ -110,8 +114,11 @@ void release_lowcmd_channel_with_loco_handover()
         spdlog::warn("LocoClient StandUp returned {}", standup_result);
     }
     sleep(5);
-    if (loco_client.GetFsmId(fsm_id) == 0) {
+    fsm_result = loco_client.GetFsmId(fsm_id);
+    if (fsm_result == 0) {
         spdlog::info("LocoClient FSM id after StandUp: {}", fsm_id);
+    } else {
+        spdlog::warn("LocoClient GetFsmId after StandUp returned {}", fsm_result);
     }
 
     spdlog::info("Commanding robot to Damp to release lowcmd channel...");
@@ -120,8 +127,11 @@ void release_lowcmd_channel_with_loco_handover()
         spdlog::warn("LocoClient Damp returned {}", damp_result);
     }
     sleep(3);
-    if (loco_client.GetFsmId(fsm_id) == 0) {
+    fsm_result = loco_client.GetFsmId(fsm_id);
+    if (fsm_result == 0) {
         spdlog::info("LocoClient FSM id after Damp: {}", fsm_id);
+    } else {
+        spdlog::warn("LocoClient GetFsmId after Damp returned {}", fsm_result);
     }
 }
 

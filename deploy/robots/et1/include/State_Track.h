@@ -198,6 +198,7 @@ private:
     void reset_pd_gain_scales();
     bool poll_motion_request_file();
     bool route_profile_request_to(const std::string& target_state);
+    bool consume_app_start_request();
     bool start_requested_motion(const std::filesystem::path& motion_file);
     void run_tracking_policy();
     void run_locomotion_policy();
