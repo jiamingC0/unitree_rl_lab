@@ -389,7 +389,7 @@ FSM:
       Dance1: "4"
       Dance2: "5"
     policy_dir: config/policy/dance/nohead_poker_face_com
-    policy_file: sdkpd_foot_mesh_identified_robust.onnx
+    policy_file: sdkpd_foot_mesh.onnx
     deploy_file: deploy.yaml
     motion_file: config/policy/dance/nohead_poker_face_com/params/poker_face.et1trk
     no_global_mode: true
