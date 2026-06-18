@@ -1629,6 +1629,33 @@ State_Track::State_Track(int state_mode, std::string state_string)
         }
         spdlog::info("Track: head hold enabled for {} sdk joints", head_hold_sdk_slots_.size());
     }
+    if (cfg["head_observation_override"]) {
+        const auto head_obs_cfg = cfg["head_observation_override"];
+        head_observation_override_enabled_ = head_obs_cfg["enabled"].as<bool>(false);
+        if (head_observation_override_enabled_) {
+            head_observation_policy_joint_ids_ =
+                head_obs_cfg["policy_joint_ids"].as<std::vector<int>>();
+            head_observation_alpha_ = head_obs_cfg["alpha"]
+                ? head_obs_cfg["alpha"].as<float>()
+                : head_observation_alpha_;
+            head_observation_max_dq_ = head_obs_cfg["max_dq"]
+                ? head_obs_cfg["max_dq"].as<float>()
+                : head_observation_max_dq_;
+            if (head_observation_policy_joint_ids_.empty()) {
+                throw std::runtime_error("Track: head_observation_override policy_joint_ids is empty.");
+            }
+            if (head_observation_alpha_ <= 0.0f || head_observation_alpha_ > 1.0f) {
+                throw std::runtime_error("Track: head_observation_override alpha must be in (0, 1].");
+            }
+            if (head_observation_max_dq_ <= 0.0f) {
+                throw std::runtime_error("Track: head_observation_override max_dq must be positive.");
+            }
+            spdlog::info("Track: head observation override enabled for {} policy joints, alpha={}, max_dq={}",
+                         head_observation_policy_joint_ids_.size(),
+                         head_observation_alpha_,
+                         head_observation_max_dq_);
+        }
+    }
     if (param::config["FSM"]["FixStand"]) {
         const auto fixstand_cfg = param::config["FSM"]["FixStand"];
         hybrid_idle_hold_kp_ = fixstand_cfg["kp"].as<std::vector<float>>();
@@ -1857,6 +1884,19 @@ bool State_Track::configure_tracking_policy(const std::string& policy_file,
     );
     policy_kp_ = env->cfg["policy_kp"].as<std::vector<float>>();
     policy_kd_ = env->cfg["policy_kd"].as<std::vector<float>>();
+    if (head_observation_override_enabled_) {
+        const int joint_count = static_cast<int>(env->robot->data.joint_pos.size());
+        for (const int policy_joint_id : head_observation_policy_joint_ids_) {
+            if (policy_joint_id < 0 || policy_joint_id >= joint_count) {
+                throw std::runtime_error(
+                    "Track: head_observation_override policy joint "
+                    + std::to_string(policy_joint_id)
+                    + " is outside loaded policy joint dimension "
+                    + std::to_string(joint_count));
+            }
+        }
+        head_observation_initialized_ = false;
+    }
     configure_pd_gain_randomization();
     spdlog::info("Track: deploy config loaded, constructing ONNX session '{}'", policy_path.string());
     env->alg = std::make_unique<isaaclab::OrtRunner>(policy_path.string());
@@ -2069,6 +2109,7 @@ void State_Track::enter()
         reference_->reset(env->robot->data.default_joint_pos);
         spdlog::info("Track: reference reset with default joint pose of size {}", env->robot->data.default_joint_pos.size());
         env->reset();
+        reset_head_observation_override(env.get());
     } else if (locomotion_env_) {
         locomotion_env_->reset();
         start_locomotion_policy_thread();
@@ -2206,6 +2247,7 @@ void State_Track::run_tracking_policy()
     env->episode_length += 1;
 
     env->robot->update();
+    apply_head_observation_override(env.get());
     const auto obs = env->observation_manager->compute();
     const auto action = env->alg->act(obs);
     env->action_manager->process_action(action);
@@ -2213,6 +2255,7 @@ void State_Track::run_tracking_policy()
     if (startup_alignment_pending_) {
         apply_startup_upper_body_interpolation(target_q);
     }
+    update_head_observation_override_from_target(target_q, env->step_dt);
     if (env->episode_length <= 5) {
         const auto& joint_pos = env->robot->data.joint_pos;
         float max_abs_target_delta = 0.0f;
@@ -2708,6 +2751,103 @@ void State_Track::apply_head_hold_command()
         motor.kp() = head_hold_kp_[i];
         motor.kd() = head_hold_kd_[i];
         motor.tau() = 0.0f;
+    }
+}
+
+void State_Track::reset_head_observation_override(isaaclab::ManagerBasedRLEnv* policy_env)
+{
+    if (!head_observation_override_enabled_ || !policy_env) {
+        return;
+    }
+
+    const auto& default_joint_pos = policy_env->robot->data.default_joint_pos;
+    head_observation_est_q_.assign(head_observation_policy_joint_ids_.size(), 0.0f);
+    head_observation_prev_q_.assign(head_observation_policy_joint_ids_.size(), 0.0f);
+    head_observation_est_dq_.assign(head_observation_policy_joint_ids_.size(), 0.0f);
+
+    for (size_t i = 0; i < head_observation_policy_joint_ids_.size(); ++i) {
+        const int policy_joint_id = head_observation_policy_joint_ids_[i];
+        const float q = (policy_joint_id >= 0 && policy_joint_id < default_joint_pos.size())
+            ? default_joint_pos[policy_joint_id]
+            : 0.0f;
+        head_observation_est_q_[i] = q;
+        head_observation_prev_q_[i] = q;
+    }
+    head_observation_initialized_ = true;
+    head_observation_debug_this_frame_ = false;
+    spdlog::info("Track: head observation override reset with {} joints",
+                 head_observation_policy_joint_ids_.size());
+}
+
+void State_Track::apply_head_observation_override(isaaclab::ManagerBasedRLEnv* policy_env)
+{
+    if (!head_observation_override_enabled_ || !policy_env) {
+        return;
+    }
+    if (!head_observation_initialized_) {
+        reset_head_observation_override(policy_env);
+    }
+    head_observation_debug_this_frame_ =
+        head_observation_debug_interval_frames_ > 0
+        && (policy_env->episode_length % head_observation_debug_interval_frames_ == 0);
+
+    auto& joint_pos = policy_env->robot->data.joint_pos;
+    auto& joint_vel = policy_env->robot->data.joint_vel;
+    for (size_t i = 0; i < head_observation_policy_joint_ids_.size(); ++i) {
+        const int policy_joint_id = head_observation_policy_joint_ids_[i];
+        if (policy_joint_id < 0 || policy_joint_id >= joint_pos.size()
+            || policy_joint_id >= joint_vel.size()) {
+            continue;
+        }
+        const float measured_q = joint_pos[policy_joint_id];
+        const float measured_dq = joint_vel[policy_joint_id];
+        joint_pos[policy_joint_id] = head_observation_est_q_[i];
+        joint_vel[policy_joint_id] = head_observation_est_dq_[i];
+        if (head_observation_debug_this_frame_) {
+            spdlog::info(
+                "Track: head obs override frame {} joint {} measured q={:.5f} dq={:.5f} -> policy obs q={:.5f} dq={:.5f}",
+                policy_env->episode_length,
+                policy_joint_id,
+                measured_q,
+                measured_dq,
+                head_observation_est_q_[i],
+                head_observation_est_dq_[i]);
+        }
+    }
+}
+
+void State_Track::update_head_observation_override_from_target(const std::vector<float>& target_q, float dt)
+{
+    if (!head_observation_override_enabled_) {
+        return;
+    }
+    if (!head_observation_initialized_ || head_observation_est_q_.size() != head_observation_policy_joint_ids_.size()) {
+        return;
+    }
+
+    const float safe_dt = dt > 1e-6f ? dt : 0.02f;
+    for (size_t i = 0; i < head_observation_policy_joint_ids_.size(); ++i) {
+        const int policy_joint_id = head_observation_policy_joint_ids_[i];
+        if (policy_joint_id < 0 || policy_joint_id >= static_cast<int>(target_q.size())) {
+            continue;
+        }
+
+        head_observation_prev_q_[i] = head_observation_est_q_[i];
+        const float target = target_q[policy_joint_id];
+        head_observation_est_q_[i] += head_observation_alpha_ * (target - head_observation_est_q_[i]);
+        const float dq = (head_observation_est_q_[i] - head_observation_prev_q_[i]) / safe_dt;
+        head_observation_est_dq_[i] = std::clamp(
+            dq,
+            -head_observation_max_dq_,
+            head_observation_max_dq_);
+        if (head_observation_debug_this_frame_) {
+            spdlog::info(
+                "Track: head obs estimate joint {} target q={:.5f} -> next policy obs q={:.5f} dq={:.5f}",
+                policy_joint_id,
+                target,
+                head_observation_est_q_[i],
+                head_observation_est_dq_[i]);
+        }
     }
 }
 

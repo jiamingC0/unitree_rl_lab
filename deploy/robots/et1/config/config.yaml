@@ -298,6 +298,11 @@ FSM:
     no_global_mode: true
     use_motion_root_command: true
     use_motion_velocity_command: true
+    head_observation_override:
+      enabled: true
+      policy_joint_ids: [24, 25]
+      alpha: 0.25
+      max_dq: 4.0
     debug_dump_first_frame: false
     debug_dump_dir: debug/et1_general_tracker_cjm_first_frame
 

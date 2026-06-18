@@ -230,6 +230,9 @@ private:
     void dump_qpos_visualizer_frame(const std::vector<float>& target_q);
     void close_qpos_visualizer_dump();
     void apply_head_hold_command();
+    void reset_head_observation_override(isaaclab::ManagerBasedRLEnv* policy_env);
+    void apply_head_observation_override(isaaclab::ManagerBasedRLEnv* policy_env);
+    void update_head_observation_override_from_target(const std::vector<float>& target_q, float dt);
     Eigen::VectorXf sample_reference_joint_pos(float time_s) const;
     void begin_startup_upper_body_interpolation(const Eigen::VectorXf& target_q);
     void apply_startup_upper_body_interpolation(std::vector<float>& target_q);
@@ -305,6 +308,16 @@ private:
     std::vector<float> head_hold_q_;
     std::vector<float> head_hold_kp_;
     std::vector<float> head_hold_kd_;
+    bool head_observation_override_enabled_ = false;
+    std::vector<int> head_observation_policy_joint_ids_;
+    float head_observation_alpha_ = 0.25f;
+    float head_observation_max_dq_ = 4.0f;
+    std::vector<float> head_observation_est_q_;
+    std::vector<float> head_observation_prev_q_;
+    std::vector<float> head_observation_est_dq_;
+    bool head_observation_initialized_ = false;
+    int head_observation_debug_interval_frames_ = 10;
+    bool head_observation_debug_this_frame_ = false;
     std::filesystem::path debug_dump_dir_;
     bool debug_dump_first_frame_ = false;
     bool first_frame_debug_dumped_ = false;
