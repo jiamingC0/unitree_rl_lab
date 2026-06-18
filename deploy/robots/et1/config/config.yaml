@@ -286,6 +286,12 @@ FSM:
       d:
         label: Rage exaggerated 001 A001
         motion_file: config/policy/general_tracker_cjm/params/rage_exaggerated_001__A001.et1trk
+      e:
+        label: Taotao 2026-03-17 06.17 segment 001
+        motion_file: config/policy/general_tracker_cjm/params/Take_2026-03-17_06.17_standcut_segment_001_2308_4659_sdk_order.et1trk
+      f:
+        label: Taotao 2026-03-17 03.58 segment 007
+        motion_file: config/policy/general_tracker_cjm/params/Take_2026-03-17_03.58_standcut_segment_007_17085_20536_sdk_order.et1trk
     request_file: debug/general_tracker_request.txt
     live_stream:
       enabled: false
